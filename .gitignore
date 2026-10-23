@@ -1,0 +1,16 @@
+.pio/
+.vscode/
+*.pyc
+__pycache__/
+.DS_Store
+tools/node_modules/
+sim/obj/
+sim/out/
+sim/sim
+sim/stub/lv_conf.h
+tools/nvs_blank.bin
+docs/flash/*.bin
+docs/index.md
+docs/notices.md
+docs/changelog.md
+site/

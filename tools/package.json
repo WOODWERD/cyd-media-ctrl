@@ -1,0 +1,2 @@
+{ "private": true, "description": "Asset tools for Media Ctrl (fonts, icons)",
+  "devDependencies": { "lv_font_conv": "^1.5.2", "@fontsource/inter": "^5.0.0", "@fontsource/jetbrains-mono": "^5.0.0", "@resvg/resvg-js": "^2.6.0" } }
