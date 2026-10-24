@@ -9,7 +9,14 @@
 extern uint32_t g_millis;
 inline uint32_t millis() { return g_millis; }
 inline void delay(uint32_t ms) { g_millis += ms; }
-struct SerialStub { template<class... A> void printf(const char* f, A... a) { ::printf(f, a...); } void println(const char* s) { ::puts(s); } void begin(int) {} };
+struct SerialStub {
+  std::string in; size_t pos = 0; std::string out;
+  template<class... A> void printf(const char* f, A... a) { char b[512]; snprintf(b, sizeof b, f, a...); out += b; ::fputs(b, stdout); }
+  void println(const char* s) { out += s; out += "\n"; ::puts(s); }
+  void begin(int) {} void setRxBufferSize(int) {}
+  int available() { return (int)(in.size() - pos); }
+  int read() { return pos < in.size() ? (unsigned char)in[pos++] : -1; }
+};
 extern SerialStub Serial;
 #define LOW 0
 #define HIGH 1

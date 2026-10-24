@@ -1,11 +1,11 @@
 {
   "name": "Media Ctrl",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "new_install_prompt_erase": false,
   "builds": [
     {
       "chipFamily": "ESP32",
-      "parts": [ { "path": "media-ctrl-v0.1.1-cyd2usb.bin", "offset": 0 } ]
+      "parts": [ { "path": "media-ctrl-v0.2.0-cyd2usb.bin", "offset": 0 } ]
     }
   ]
 }

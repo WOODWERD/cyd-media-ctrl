@@ -21,7 +21,7 @@ jobs:
           cp README.md docs/index.md
           sed -e 's|](docs/|](|g' -e 's|](THIRD_PARTY_NOTICES.md)|](notices.md)|g' -e 's|](CHANGELOG.md)|](changelog.md)|g' -e 's|](LICENSE)|](notices.md#license)|g' -i docs/index.md
           cp THIRD_PARTY_NOTICES.md docs/notices.md && printf '\n\n## License\n\n```\n' >> docs/notices.md && cat LICENSE >> docs/notices.md && printf '\n```\n' >> docs/notices.md
-          cp CHANGELOG.md docs/changelog.md
+          cp CHANGELOG.md docs/changelog.md && sed -i "s|](docs/|](|g" docs/changelog.md
           cp release/*.bin docs/flash/
       - run: mkdocs build --strict
       - uses: actions/configure-pages@v5

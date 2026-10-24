@@ -23,3 +23,10 @@ Run this checklist on real hardware before every release. Note the firmware vers
 | 17 | About › Forget pairing (two taps). | Reboots to the pairing screen with a new address. |
 | 18 | Untouched for 2 min. | Backlight dims; a touch or a new track wakes it. |
 | 19 | Serial at 115200. | `#alive` every 5 s; no resets. |
+| 20 | Mac: `mac-helper/install.sh`, board on USB. | Log shows "found Media Ctrl"; board was **not** reset when the helper opened the port. |
+| 21 | Mac: play in Spotify. | App, title, artist, progress and system volume appear; Like tile dimmed. |
+| 22 | Mac: every button (transport, ±15 s, shuffle, repeat, volume, mute). | Spotify / system responds; screen updates within ~1 s. |
+| 23 | Mac: switch to Music, Like. | Track is favorited in Music. |
+| 24 | Mac: quit the apps. | **Nothing playing** with "Mac" top right; play resumes the last app. |
+| 25 | iPad playing over Bluetooth while the Mac helper is idle. | iPad's track shows; start Spotify on the Mac and the Mac's track takes over. |
+| 26 | `./stop.sh`, flash with ESP Ctrl, `./start.sh`. | Port free for flashing; helper reconnects afterwards. |

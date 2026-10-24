@@ -10,6 +10,7 @@ Media Ctrl itself is © 2026 WOODWERD LLC and MIT-licensed (see `LICENSE`). It b
 | [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) | FreeBSD (BSD-2), plus BSD portions from Adafruit_GFX | Display driver |
 | [XPT2046_Touchscreen](https://github.com/PaulStoffregen/XPT2046_Touchscreen) | MIT | Touch controller |
 | [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) 2.x | Apache-2.0 (Apache NimBLE) | Bluetooth LE: HID device and GATT client |
+| [ArduinoJson](https://github.com/bblanchon/ArduinoJson) 7 | MIT | Parses the Mac helper's messages |
 | [arduino-esp32](https://github.com/espressif/arduino-esp32) core | LGPL-2.1 | Arduino core for ESP32. Full source of this project is provided, which satisfies the relinking requirements. |
 | [ESP-IDF](https://github.com/espressif/esp-idf) components (bundled by the platform) | Apache-2.0 | |
 | [platform-espressif32](https://github.com/platformio/platform-espressif32) | Apache-2.0 | Build platform only; not distributed |
@@ -17,6 +18,14 @@ Media Ctrl itself is © 2026 WOODWERD LLC and MIT-licensed (see `LICENSE`). It b
 The HID report map in `src/ble_media.cpp` uses the Consumer page of the USB HID Usage Tables, a public specification. The PnP ID values are conventional placeholders and don't claim a registered vendor ID.
 
 The Apple Media Service client is written from Apple's published *Apple Media Service* specification. No Apple code is used.
+
+## Bundled with the Mac helper (`mac-helper/serial/`)
+
+| Component | License | Notes |
+|---|---|---|
+| [pyserial](https://github.com/pyserial/pyserial) 3.5 | BSD-3-Clause | Copied unmodified, trimmed to the POSIX/macOS modules. Licence in `mac-helper/serial/LICENSE-pyserial.txt`. |
+
+The helper controls Spotify and Music through their public AppleScript dictionaries and uses no code from either.
 
 ## Fonts (`src/assets/font_*.c`, converted with `lv_font_conv`)
 

@@ -16,8 +16,9 @@
 #include "theme.h"
 #include "icons.h"
 #include "ble_media.h"
+#include "host_link.h"
 
-#define FW_VERSION "0.1.1"
+#define FW_VERSION "0.2.0"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -421,12 +422,13 @@ static void layout_track_text(const char* title) {
 static void render() {
   Media::snapshot(np);
   const bool linked = np.link >= Media::LINK_READY;
-  const bool ams = np.link == Media::LINK_AMS;
+  const bool host = np.link == Media::LINK_HOST;
+  const bool ams = np.link == Media::LINK_AMS || host;   // "rich": we know what is playing
   const bool pairing = !linked;
 
   // top bar
   lv_obj_set_style_bg_color(dot, C(linked ? C_TEXT : C_WARN), 0);
-  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? (np.player[0] ? np.player : "iPad") : "keys only");
+  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? (np.player[0] ? np.player : host ? "Mac" : "iPad") : "keys only");
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
   set_text(lblTitle, pairing ? "Not connected" : "Media Ctrl");
@@ -449,7 +451,7 @@ static void render() {
   } else {
     lv_obj_add_flag(pgPair, LV_OBJ_FLAG_HIDDEN);
   }
-  set_text(lblAboutLink, ams ? "Apple Media Service" : linked ? "media keys only" : "not connected");
+  set_text(lblAboutLink, host ? "Mac helper (USB)" : ams ? "Apple Media Service" : linked ? "media keys only" : "not connected");
 
   // what is playing
   const bool hasTrack = ams && (np.title[0] || np.artist[0]);
@@ -470,7 +472,7 @@ static void render() {
     lv_obj_set_style_text_font(lblArtist, F_BODY, 0);
     lv_label_set_long_mode(lblArtist, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_height(lblArtist, LV_SIZE_CONTENT);
-    set_text(lblArtist, nothing ? "Start something on the iPad, or press play to resume the last app."
+    set_text(lblArtist, nothing ? (host ? "Start Spotify or Music on the Mac, or press play to resume." : "Start something on the iPad, or press play to resume the last app.")
                                 : "Track info comes from iPad and iPhone only. The buttons still work.");
   }
 
@@ -551,6 +553,7 @@ static void ui_tick(lv_timer_t*) {
 
 // ---------------- arduino ----------------
 void setup() {
+  Serial.setRxBufferSize(2048);   // now-playing lines from the Mac helper can run to ~1 KB
   Serial.begin(115200);
   Serial.println("Media Ctrl v" FW_VERSION);
   pinMode(LED_R, OUTPUT); pinMode(LED_G, OUTPUT); pinMode(LED_B, OUTPUT); led(false, false, false);
@@ -585,6 +588,7 @@ void setup() {
   render();
   lv_timer_handler();          // first frame before the radio starts
   Media::begin(BLE_NAME);
+  HostLink::begin(FW_VERSION);
 
   lv_timer_create(ui_tick, 100, nullptr);
   lastTick = millis();

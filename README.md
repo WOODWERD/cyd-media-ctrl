@@ -2,7 +2,7 @@
 
 _An open-hardware project from [WOODWERD LLC](https://woodwerd.com), a design group in Austin, Texas._
 
-Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small media remote that stands beside your keyboard, in portrait. It pairs with an **iPad** over Bluetooth, shows what is playing, and controls it. The iPad needs no app.
+Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small media remote that stands beside your keyboard, in portrait. It pairs with an **iPad** over Bluetooth, shows what is playing, and controls it. The iPad needs no app. On a **Mac**, a small helper app does the same over the USB cable for Spotify and Apple Music. See [Media Ctrl on a Mac](docs/MAC.md).
 
 - **Now playing:** app name, track title, artist, a live progress bar with elapsed and remaining time, and the iPad's volume.
 - **Transport:** large previous, play/pause and next buttons, plus volume − and +.
@@ -22,7 +22,9 @@ A single Bluetooth LE link to the iPad does two jobs:
 1. **Media keys.** The board is a Bluetooth HID device that sends only the standard media keys (Consumer Control page): play/pause, next, previous, volume and mute. Every computer and tablet understands these. The HID descriptor has no keyboard collection, so the iPad keeps its on-screen keyboard.
 2. **Apple Media Service (AMS).** iPadOS and iOS publish the system's Now Playing state to paired Bluetooth accessories through AMS, the same channel an Apple Watch uses. The board subscribes to it to read the app, title, artist, duration, elapsed time, volume, shuffle and repeat. It also sends AMS remote commands, including skip ±, like, shuffle and repeat, which have no media-key equivalent.
 
-When AMS is present, the board uses it for everything AMS can do. When it isn't, the media keys are the fallback and the screen says so.
+3. **The Mac helper (USB).** macOS doesn't publish Now Playing to accessories, so on a Mac the [helper app](docs/MAC.md) reads Spotify and Music and sends that to the board as JSON lines over the USB serial port. It runs the board's button presses back as AppleScript.
+
+When AMS (or the Mac helper) is present, the board uses it for everything it can do. When both the iPad and the Mac are connected, whichever is playing is shown. When it isn't, the media keys are the fallback and the screen says so.
 
 | On the screen | iPad (AMS) | Without AMS (media keys) |
 |---|---|---|
@@ -37,24 +39,24 @@ When AMS is present, the board uses it for everything AMS can do. When it isn't,
 | Host | What you get |
 |---|---|
 | iPad, iPhone | Everything above. |
-| Mac | Media keys only. macOS does not publish Apple Media Service to accessories, so the screen shows **Connected · keys only**. A Mac build with a small helper app over USB is planned. |
+| Mac | Everything above for **Spotify** and **Apple Music** with the [Mac helper](docs/MAC.md) over USB (Like works in Music only). Without the helper: media keys only. |
 | Windows, Android | Media keys only (untested). |
 
 The board connects to one host at a time and remembers several. To add a second device, long-press the title and choose **Pair another device**. That releases the current host for a minute so the new one can pair.
 
 ## Quick start (no toolchain)
 
-1. **Flash** `release/media-ctrl-v0.1.1-cyd2usb.bin` at address **0x0**, either:
+1. **Flash** `release/media-ctrl-v0.2.0-cyd2usb.bin` at address **0x0**, either:
    - from the [Flash it](docs/flash/index.md) page in Chrome or Edge, or
    - in a terminal, after `pip install esptool`:
      ```
-     esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.1.1-cyd2usb.bin
+     esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.2.0-cyd2usb.bin
      ```
    If the port doesn't appear, hold **BOOT** while plugging the board in. 921600 baud is unreliable on the CH340.
 2. **Pair.** On the iPad, open Settings › Bluetooth, tap **Media Ctrl**, then tap **Pair**.
 3. **Play something.** Within a couple of seconds the screen fills in.
 
-The full image starts with a clean pairing table each time it's flashed. To update without losing pairings, write `release/media-ctrl-v0.1.1-cyd2usb-app-0x10000.bin` at **0x10000** instead.
+The full image starts with a clean pairing table each time it's flashed. To update without losing pairings, write `release/media-ctrl-v0.2.0-cyd2usb-app-0x10000.bin` at **0x10000** instead.
 
 ## Hardware
 
@@ -82,6 +84,7 @@ The firmware runs fine on a bare board too.
 
 - [Getting started](docs/GETTING_STARTED.md): pairing, every screen and button, About and troubleshooting.
 - [Flash it](docs/flash/index.md): browser flasher and terminal commands.
+- [Media Ctrl on a Mac](docs/MAC.md): the helper app, install, and how it works.
 - [Firmware & code](docs/firmware.md): building, build flags, how the Bluetooth layer works, the host simulator.
 - [Bench test](docs/TESTING.md): the checklist used before each release.
 - [Case & parts](https://github.com/WOODWERD/cyd-case): the WOODWERD CYD Case, BOM and build guide.

@@ -17,13 +17,13 @@ If the port doesn't appear, hold **BOOT** on the board while plugging it in, the
 
 ```
 pip install esptool
-esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.1.1-cyd2usb.bin
+esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.2.0-cyd2usb.bin
 ```
 
 That full image starts with a clean pairing table. To update a board that's already paired, without re-pairing, write only the app at 0x10000:
 
 ```
-esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x10000 media-ctrl-v0.1.1-cyd2usb-app-0x10000.bin
+esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x10000 media-ctrl-v0.2.0-cyd2usb-app-0x10000.bin
 ```
 
 Both images are in the repo under `release/` and attached to each GitHub release.

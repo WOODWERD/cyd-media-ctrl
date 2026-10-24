@@ -22,7 +22,8 @@ enum Link : uint8_t {
   LINK_PAIRING,       // connected, waiting for the iPad to finish pairing/encryption
   LINK_READY,         // encrypted; looking for AMS
   LINK_AMS,           // now-playing info flowing
-  LINK_BLIND          // connected, but the iPad offers no AMS - media keys only
+  LINK_BLIND,         // connected, but the iPad offers no AMS - media keys only
+  LINK_HOST           // the Mac helper is feeding now-playing over USB (see host_link.h)
 };
 
 struct NowPlaying {

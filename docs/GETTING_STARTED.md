@@ -53,7 +53,7 @@ Play still works. It resumes whatever app last played. Previous and next are dis
 
 ![Keys only](screen-keys-only.png)
 
-If the host doesn't publish Now Playing information (a Mac, or an iPad that hasn't offered it yet), the board shows **Connected · keys only**. Play/pause, previous, next and volume still work as standard media keys.
+If the host doesn't publish Now Playing information (a Mac without the [helper](MAC.md), or an iPad that hasn't offered it yet), the board shows **Connected · keys only**. Play/pause, previous, next and volume still work as standard media keys.
 
 ## 6. About (long-press the title)
 

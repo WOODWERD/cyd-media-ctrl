@@ -2,6 +2,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
+#include "host_link.h"
 
 // ---------------------------------------------------------------- HID: consumer control only
 // One 16-bit usage per report (array style). No keyboard collection, so the iPad keeps its
@@ -252,6 +253,7 @@ void Media::begin(const char* name) {
 }
 
 void Media::tick() {
+  HostLink::tick();
   if (quickDrops >= 4) {   // the iPad keeps an old bond we no longer have: become a new device
     Serial.println("[ble] pairing refused 4 times - new address");
     forgetPairing();
@@ -261,11 +263,23 @@ void Media::tick() {
   if (needFullArtist) { needFullArtist = false; readFull(TR_ARTIST, np.artist, sizeof np.artist); }
 }
 
+// Two sources can be live at once: the iPad over Bluetooth (AMS) and the Mac helper over USB.
+// Whichever is actually playing wins; if neither is, the Mac helper does (the board is on its cable).
+static bool useHost() {
+  if (!HostLink::active()) return false;
+  Media::NowPlaying h; HostLink::snapshot(h);
+  if (h.state == 1) return true;
+  portENTER_CRITICAL(&mux); const bool blePlaying = np.link == Media::LINK_AMS && np.state == 1; portEXIT_CRITICAL(&mux);
+  return !blePlaying;
+}
+
 void Media::snapshot(NowPlaying& out) {
+  if (useHost()) { HostLink::snapshot(out); return; }
   portENTER_CRITICAL(&mux); out = np; portEXIT_CRITICAL(&mux);
 }
 
 bool Media::supports(const NowPlaying& s, Cmd c) {
+  if (s.link == LINK_HOST) return c == CMD_MUTE ? (s.supported & (1u << 15)) : (c < 15 && (s.supported & (1u << c)));
   if (c == CMD_MUTE) return s.link >= LINK_READY;
   if (s.link == LINK_AMS) return c < 16 && (s.supported & (1u << c));
   if (s.link == LINK_READY || s.link == LINK_BLIND)   // HID keys only
@@ -285,6 +299,7 @@ static void hidTap(uint16_t usage) {
 
 void Media::send(Cmd c) {
   NowPlaying s; snapshot(s);
+  if (s.link == LINK_HOST) { HostLink::send(c); Serial.printf("[usb] command %u\n", c); return; }
   if (c != CMD_MUTE && s.link == LINK_AMS && chRemote && (s.supported & (1u << c))) {
     uint8_t id = c;
     if (chRemote->writeValue(&id, 1, true)) { Serial.printf("[ams] command %u\n", c); return; }

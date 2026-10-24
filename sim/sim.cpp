@@ -1,6 +1,7 @@
 // Host simulator: runs the real firmware UI (src/main.cpp) against fixture now-playing data
 // and writes each screen as a PPM, so layouts are checked before anything is flashed.
 #include "../src/ble_media.h"
+#include "../src/host_link.h"
 #include <Arduino.h>
 uint32_t g_millis = 1000;
 SerialStub Serial;
@@ -16,7 +17,14 @@ void Media::forgetPairing() {}
 void Media::pairAnother() {}
 bool Media::pairWindow() { return false; }
 String Media::address() { return String("D7:3A:91:5C:0E:42"); }
+void HostLink::begin(const char*) {}
+void HostLink::tick() {}
+bool HostLink::active() { return false; }
+void HostLink::snapshot(Media::NowPlaying&) {}
+void HostLink::send(Media::Cmd) {}
+void HostLink::handleLine(const char*) {}
 bool Media::supports(const NowPlaying& s, Cmd c) {
+  if (s.link == LINK_HOST) return c == CMD_MUTE ? (s.supported & (1u << 15)) : (c < 15 && (s.supported & (1u << c)));
   if (c == CMD_MUTE) return s.link >= LINK_READY;
   if (s.link == LINK_AMS) return c < 16 && (s.supported & (1u << c));
   if (s.link == LINK_READY || s.link == LINK_BLIND)
@@ -60,5 +68,16 @@ int main() {
   fx.title[0] = fx.artist[0] = 0; fx.state = -1; fx.duration = 0; fx.rev++; dump("7_nothing_playing");
   fx.link = Media::LINK_BLIND; fx.player[0] = 0; fx.rev++; dump("8_keys_only");
   about_open(nullptr); dump("9_about");
+  about_close(nullptr);
+  // Mac helper over USB
+  fx = Media::NowPlaying(); fx.link = Media::LINK_HOST;
+  strcpy(fx.player, "Spotify"); strcpy(fx.title, "Low Tide Static, Pt. 2"); strcpy(fx.artist, "The Hollow Pines");
+  fx.duration = 253; fx.elapsed = 102.4; fx.state = 1; fx.rate = 1; fx.elapsedAt = g_millis; fx.volume = 62;
+  fx.shuffle = 2; fx.repeat = 0; fx.supported = 0x07FF | (1u << 15); fx.rev++;   // no LIKE for Spotify
+  dump("10_mac_spotify");
+  set_page(1); dump("11_mac_more"); set_page(0);
+  fx.title[0] = fx.artist[0] = fx.player[0] = 0; fx.state = -1; fx.duration = 0;
+  fx.supported = (1u << Media::CMD_TOGGLE) | (1u << Media::CMD_PLAY) | (1u << Media::CMD_VOL_UP) | (1u << Media::CMD_VOL_DOWN) | (1u << 15); fx.rev++;
+  dump("12_mac_idle");
   return 0;
 }

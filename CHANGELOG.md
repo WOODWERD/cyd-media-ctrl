@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.0 — 2026-10-23
+- **Mac support with full Now Playing.** A new helper app (`mac-helper/`) reads Spotify and Apple Music on the Mac and feeds the board over the USB cable. It also carries button presses back as AppleScript: play/pause, previous/next, ±15 s, shuffle, repeat, like (Music) and system volume/mute. Install with `./install.sh` (LaunchAgent; uses the Mac's built-in Python). See [docs/MAC.md](docs/MAC.md).
+- Firmware: a USB host link (JSON lines at 115200, documented in `src/host_link.h`) alongside Bluetooth. The same firmware serves the iPad and the Mac; when both are connected, whichever is playing is shown. About shows the source ("Mac helper (USB)").
+- Firmware test on the host: `sim/test_host_link.cpp` checks the parser against lines the helper produced. Helper tests: `mac-helper/tests/test_helper.py` (fake Mac, fake board on a pseudo-terminal).
+- Adds ArduinoJson (MIT) to the firmware and bundles pyserial (BSD-3-Clause) with the helper.
+- Prebuilt images: `release/media-ctrl-v0.2.0-cyd2usb.bin` (0x0) and `release/media-ctrl-v0.2.0-cyd2usb-app-0x10000.bin` (0x10000, keeps pairings).
+
 ## Docs — 2026-10-23
 - Case & parts section: links to the shared [WOODWERD CYD Case](https://github.com/WOODWERD/cyd-case) with a short BOM.
 
