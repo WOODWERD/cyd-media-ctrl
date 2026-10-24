@@ -62,7 +62,21 @@ The full image starts with a clean pairing table each time it's flashed. To upda
 - **Original micro-USB CYD (ILI9341).** Build the `cyd` environment (untested).
 - **Power:** USB from the iPad's charger, a hub or the Mac. The backlight dims after two minutes untouched and never turns off; a touch or a new track wakes it.
 
-Nothing to solder. Any CYD case that leaves the screen exposed works, held in portrait.
+Nothing to solder.
+
+## Case & parts
+
+Media Ctrl fits the **[WOODWERD CYD Case](https://github.com/WOODWERD/cyd-case)**, the printed housing shared by every WOODWERD CYD build. It has STL/STEP files, a full BOM, a fastener spec and a step-by-step build guide. Use housing **v2** for now, standing in portrait; a dedicated portrait stand is planned.
+
+| Qty | Part | Spec |
+|---|---|---|
+| 1 | Cheap Yellow Display, **USB-C / 2-USB variant** | ESP32-2432S028R with a USB-C port |
+| 1 | USB-C cable, data | USB-C → USB-A recommended (some boards lack CC resistors) |
+| 4 | Flat-head screw | M3 × 14 mm, 90° countersunk (DIN 7991) |
+| 4 | Heat-set insert | M3 brass, 4 mm long, OD 4.0–4.2 mm |
+| 3 | Printed parts | Base, lid, light pipe: see [cyd-case](https://github.com/WOODWERD/cyd-case) |
+
+The firmware runs fine on a bare board too.
 
 ## Docs
 
@@ -70,6 +84,7 @@ Nothing to solder. Any CYD case that leaves the screen exposed works, held in po
 - [Flash it](docs/flash/index.md): browser flasher and terminal commands.
 - [Firmware & code](docs/firmware.md): building, build flags, how the Bluetooth layer works, the host simulator.
 - [Bench test](docs/TESTING.md): the checklist used before each release.
+- [Case & parts](https://github.com/WOODWERD/cyd-case): the WOODWERD CYD Case, BOM and build guide.
 - [Changelog](CHANGELOG.md).
 
 ## License

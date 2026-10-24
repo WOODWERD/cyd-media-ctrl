@@ -33,6 +33,7 @@ nav:
   - Flash it: flash/index.md
   - Firmware & code: firmware.md
   - Bench test: TESTING.md
+  - Case & parts: https://github.com/WOODWERD/cyd-case
   - Changelog: changelog.md
   - Notices & license: notices.md
 markdown_extensions:

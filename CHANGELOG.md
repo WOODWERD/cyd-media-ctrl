@@ -1,5 +1,8 @@
 # Changelog
 
+## Docs — 2026-10-23
+- Case & parts section: links to the shared [WOODWERD CYD Case](https://github.com/WOODWERD/cyd-case) with a short BOM.
+
 ## v0.1.1 — 2026-10-23
 - The board now advertises as a keyboard, the appearance macOS lists, so it shows up in a Mac's Bluetooth settings. The HID map still has no keyboard collection, so the iPad keeps its on-screen keyboard.
 - **Pair another device** (About): releases the current host for 60 s so a second iPad, iPhone or Mac can pair.
