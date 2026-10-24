@@ -47,7 +47,7 @@ SPIClass touchSpi = SPIClass(VSPI);
 XPT2046_Touchscreen touch(XPT_CS, XPT_IRQ);
 uint16_t tMinX = 300, tMaxX = 3800, tMinY = 300, tMaxY = 3800;
 static Preferences uiPrefs;
-static uint8_t rot = 0;   // panel rotation: 0 or 2 (portrait / portrait flipped)
+static uint8_t rot = 2;   // panel rotation: 2 = portrait, USB cable at the bottom (default); 0 = flipped
 
 #define DRAW_BUF_SIZE (SCREEN_W * SCREEN_H / 10 * (LV_COLOR_DEPTH / 8))
 static uint8_t* draw_buf;
@@ -559,7 +559,7 @@ void setup() {
   pinMode(LED_R, OUTPUT); pinMode(LED_G, OUTPUT); pinMode(LED_B, OUTPUT); led(false, false, false);
 
   uiPrefs.begin("mediaui", false);
-  rot = uiPrefs.getUChar("rot", 0) == 2 ? 2 : 0;
+  rot = uiPrefs.getUChar("rot", 2) == 0 ? 0 : 2;   // default: portrait with the USB cable at the bottom
 
   tft.init();
   tft.setRotation(rot);
