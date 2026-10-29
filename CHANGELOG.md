@@ -1,5 +1,10 @@
 # Changelog
 
+## Docs — 2026-10-29
+- The docs site now wears the shared WOODWERD docs theme ([WOODWERD/ctrl-docs-theme](https://github.com/WOODWERD/ctrl-docs-theme)):
+  WOODWERD Design mark, ink header with an amber rule, warm cream pages, Inter and JetBrains Mono, and a strip
+  linking the Ctrl family. Docs build pinned to MkDocs 1.6 and Material 9.7.7.
+
 ## v0.2.0 — 2026-10-23
 - **Mac support with full Now Playing.** A new helper app (`mac-helper/`) reads Spotify and Apple Music on the Mac and feeds the board over the USB cable. It also carries button presses back as AppleScript: play/pause, previous/next, ±15 s, shuffle, repeat, like (Music) and system volume/mute. Install with `./install.sh` (LaunchAgent; uses the Mac's built-in Python). See [docs/MAC.md](docs/MAC.md).
 - Firmware: a USB host link (JSON lines at 115200, documented in `src/host_link.h`) alongside Bluetooth. The same firmware serves the iPad and the Mac; when both are connected, whichever is playing is shown. About shows the source ("Mac helper (USB)").

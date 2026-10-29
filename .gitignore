@@ -16,3 +16,4 @@ docs/changelog.md
 site/
 __pycache__/
 sim/test_host_link
+docs-theme/
