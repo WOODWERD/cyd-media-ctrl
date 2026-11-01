@@ -68,7 +68,7 @@ Nothing to solder.
 
 ## Case & parts
 
-Media Ctrl fits the **[WOODWERD CYD Case](https://github.com/WOODWERD/cyd-case)**, the printed housing shared by every WOODWERD CYD build. It has STL/STEP files, a full BOM, a fastener spec and a step-by-step build guide. Use housing **v2** for now, standing in portrait; a dedicated portrait stand is planned.
+Media Ctrl fits the **[WOODWERD CYD Case](https://woodwerd.github.io/cyd-case/)**, the printed housing shared by every WOODWERD CYD build. It has STL/STEP files, a full BOM, a fastener spec and a step-by-step build guide. Use housing **v2** for now, standing in portrait; a dedicated portrait stand is planned.
 
 | Qty | Part | Spec |
 |---|---|---|
@@ -76,7 +76,7 @@ Media Ctrl fits the **[WOODWERD CYD Case](https://github.com/WOODWERD/cyd-case)*
 | 1 | USB-C cable, data | USB-C → USB-A recommended (some boards lack CC resistors) |
 | 4 | Flat-head screw | M3 × 14 mm, 90° countersunk (DIN 7991) |
 | 4 | Heat-set insert | M3 brass, 4 mm long, OD 4.0–4.2 mm |
-| 3 | Printed parts | Base, lid, light pipe: see [cyd-case](https://github.com/WOODWERD/cyd-case) |
+| 3 | Printed parts | Base, lid, light pipe: see [cyd-case](https://woodwerd.github.io/cyd-case/) |
 
 The firmware runs fine on a bare board too.
 
@@ -87,7 +87,7 @@ The firmware runs fine on a bare board too.
 - [Media Ctrl on a Mac](docs/MAC.md): the helper app, install, and how it works.
 - [Firmware & code](docs/firmware.md): building, build flags, how the Bluetooth layer works, the host simulator.
 - [Bench test](docs/TESTING.md): the checklist used before each release.
-- [Case & parts](https://github.com/WOODWERD/cyd-case): the WOODWERD CYD Case, BOM and build guide.
+- [Case & parts](https://woodwerd.github.io/cyd-case/): the WOODWERD CYD Case, BOM and build guide.
 - [Changelog](CHANGELOG.md).
 
 ## License

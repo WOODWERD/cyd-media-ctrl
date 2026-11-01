@@ -51,7 +51,7 @@ nav:
   - On a Mac: MAC.md
   - Firmware & code: firmware.md
   - Bench test: TESTING.md
-  - Case & parts: https://github.com/WOODWERD/cyd-case
+  - Case & parts: https://woodwerd.github.io/cyd-case/
   - Changelog: changelog.md
   - Notices & license: notices.md
 markdown_extensions:
