@@ -48,15 +48,18 @@ void tick();                         // call from loop()
 void snapshot(NowPlaying& out);      // thread-safe copy for the UI
 void send(Cmd c);                    // AMS when available, else the matching HID media key
 bool supports(const NowPlaying& np, Cmd c);
-void pairAnother();                  // open a 60 s pair window; drops a host only with both slots full
+void pairAnother();                  // open a 60 s pair window; drops a host only with every slot full
 bool pairWindow();
-struct Device {                      // one reachable host, for the Devices screen (MC-S11)
-  int id;
-  char name[24], sub[48];            // "My iPhone", "iPhone · Bluetooth · Spotify"
+struct Device {                      // one host for the Devices screen (MC-S11)
+  int id;                            // a Bluetooth slot from 0, the helper after them, -1 saved and not connected
+  char name[32], sub[48];            // "My iPhone", "iPhone · Bluetooth · Spotify"
+  char kind[8];                      // "iPhone", "iPad" or ""
   int8_t state;                      // as NowPlaying.state
-  bool shown;
+  bool shown, saved, helper;
+  uint8_t addr[6], addrType;         // Bluetooth identity, for forget()
 };
-int devices(Device* out, int cap);   // fills out, returns the count
+int devices(Device* out, int cap);   // connected hosts, then saved ones (MC-R58); returns the count
+bool forget(const Device& d);        // forget one Bluetooth device, keeping every other bond (MC-R53)
 void showSource(int id);             // show this host now; it stands until another starts (MC-R47)
 void setVolume(int level);           // exact level, helper hosts only (MC-R48)
 const char* shownName();             // the shown source's own name, or "Bluetooth"

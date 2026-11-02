@@ -39,7 +39,10 @@ enum { Q_INDEX = 0, Q_COUNT = 1, Q_SHUFFLE = 2, Q_REPEAT = 3 };
 enum { TR_ARTIST = 0, TR_ALBUM = 1, TR_TITLE = 2, TR_DURATION = 3 };
 
 // ---------------------------------------------------------------- state
-static const int SLOTS = 2;                  // Bluetooth hosts held at once (MC-R39)
+static const int SLOTS = 3;                  // Bluetooth hosts held at once: phone, tablet, computer (MC-R62)
+#ifndef USB_MEDIA
+#define USB_MEDIA 0                          // media over the USB helper; off, the cable is for diagnostics (MC-R61)
+#endif
 static const int SRC_HOST = SLOTS;           // the USB helper, as a source after the slots
 
 struct Slot {
@@ -52,6 +55,7 @@ struct Slot {
   uint32_t connectedAt = 0;
   char name[24] = "";                        // the host's own name, read after AMS is up
   char kind[8] = "";                         // "iPhone" or "iPad", from its model string
+  NimBLEAddress id;                          // identity address, once encrypted
 };
 
 static NimBLEServer* srv = nullptr;
@@ -63,6 +67,7 @@ static Slot slots[SLOTS];
 static int shown = SRC_HOST;                 // the source on screen
 static bool played = false;                  // something has played since boot, or a source was chosen
 static uint8_t quickDrops = 0;               // host killed the link before encryption, in a row
+static bool forgotOne = false;               // a device was forgotten since boot: MC-R6 stays off (MC-R56)
 static Preferences prefs;
 static uint8_t ownAddr[6];
 // "Pair another device" with both slots full: drop one host and refuse it for a minute
@@ -174,7 +179,7 @@ class ServerCB : public NimBLEServerCallbacks {
     quickDrops = quick ? quickDrops + 1 : 0;
     s->conn = 0xFFFF; s->amsAt = 0;
     s->chRemote = s->chUpdate = s->chAttr = nullptr;
-    s->name[0] = s->kind[0] = 0;
+    s->name[0] = s->kind[0] = 0; s->id = NimBLEAddress();
     portENTER_CRITICAL(&mux); clearTrack(s->np); s->np.link = Media::LINK_ADVERTISING; bump(*s); portEXIT_CRITICAL(&mux);
     Serial.printf("[ble] disconnected 0x%03X after %lu ms%s\n", reason, (unsigned long)up, quick ? " (pairing refused)" : "");
   }
@@ -186,11 +191,59 @@ class ServerCB : public NimBLEServerCallbacks {
     if (!s) return;
     if (inPairWindow()) pairWindowUntil = 0;   // a device paired: window done
     quickDrops = 0;
+    s->id = info.getIdAddress();
     setLink(*s, Media::LINK_READY);
     s->amsAt = millis() + 1200;   // let iOS finish its own HID discovery first
   }
   void onMTUChange(uint16_t mtu, NimBLEConnInfo&) override { Serial.printf("[ble] MTU %u\n", mtu); }
 };
+
+// ---------------------------------------------------------------- saved names (MC-R59)
+// The name and kind of each bonded device, so the Devices screen can list it while it's away.
+// Entries are keyed by identity address and reused once their bond is gone.
+static const int SAVED = 6;                  // matches CONFIG_BT_NIMBLE_MAX_BONDS
+struct Saved { uint8_t addr[6]; char name[24]; char kind[8]; };
+static Saved saved[SAVED];
+static Preferences names;
+
+static bool isEmpty(const Saved& e) { static const uint8_t z[6] = {}; return !memcmp(e.addr, z, 6); }
+static bool sameAddr(const uint8_t* a, const NimBLEAddress& b) { return !b.isNull() && !memcmp(a, b.getVal(), 6); }
+static bool isBonded(const uint8_t* a) {
+  for (int i = 0; i < NimBLEDevice::getNumBonds(); i++) if (sameAddr(a, NimBLEDevice::getBondedAddress(i))) return true;
+  return false;
+}
+static void storeName(int i) {
+  char k[4]; snprintf(k, sizeof k, "d%d", i);
+  if (isEmpty(saved[i])) names.remove(k); else names.putBytes(k, &saved[i], sizeof(Saved));
+}
+static void loadNames() {
+  names.begin("mcnames", false);
+  for (int i = 0; i < SAVED; i++) {
+    char k[4]; snprintf(k, sizeof k, "d%d", i);
+    if (!names.isKey(k) || names.getBytes(k, &saved[i], sizeof(Saved)) != sizeof(Saved)) memset(&saved[i], 0, sizeof(Saved));
+  }
+}
+static Saved* findName(const NimBLEAddress& a) {
+  for (Saved& e : saved) if (!isEmpty(e) && sameAddr(e.addr, a)) return &e;
+  return nullptr;
+}
+static void rememberName(const Slot& s) {
+  if (s.id.isNull() || !s.name[0]) return;
+  int at = -1;
+  for (int i = 0; i < SAVED && at < 0; i++) if (!isEmpty(saved[i]) && sameAddr(saved[i].addr, s.id)) at = i;
+  for (int i = 0; i < SAVED && at < 0; i++) if (isEmpty(saved[i])) at = i;
+  for (int i = 0; i < SAVED && at < 0; i++) if (!isBonded(saved[i].addr)) at = i;
+  if (at < 0) return;
+  Saved& e = saved[at];
+  if (sameAddr(e.addr, s.id) && !strcmp(e.name, s.name) && !strcmp(e.kind, s.kind)) return;   // unchanged: spare the flash
+  memcpy(e.addr, s.id.getVal(), 6);
+  strlcpy(e.name, s.name, sizeof e.name);
+  strlcpy(e.kind, s.kind, sizeof e.kind);
+  storeName(at);
+}
+static void forgetName(const NimBLEAddress& a) {
+  for (int i = 0; i < SAVED; i++) if (!isEmpty(saved[i]) && sameAddr(saved[i].addr, a)) { memset(&saved[i], 0, sizeof(Saved)); storeName(i); }
+}
 
 // ---------------------------------------------------------------- AMS setup (main loop)
 static bool registerAttrs(Slot& s, uint8_t ent, std::initializer_list<uint8_t> attrs) {
@@ -206,9 +259,11 @@ static void readIdentity(Slot& s, NimBLEClient* cl) {
   NimBLEAttValue m = cl->getValue(NimBLEUUID((uint16_t)0x180A), NimBLEUUID((uint16_t)0x2A24));   // model, "iPad14,8"
   copyStr(model, sizeof model, m.data(), m.size());
   const char* kind = !strncmp(model, "iPhone", 6) || strstr(s.name, "iPhone") ? "iPhone"
-                   : !strncmp(model, "iPad", 4) || strstr(s.name, "iPad") ? "iPad" : "";
+                   : !strncmp(model, "iPad", 4) || strstr(s.name, "iPad") ? "iPad"
+                   : !strncmp(model, "Mac", 3) || strstr(s.name, "Mac") ? "Mac" : "";
   strlcpy(s.kind, kind, sizeof s.kind);
   Serial.printf("[ble] host name \"%s\" model \"%s\"\n", s.name, model);
+  rememberName(s);
 }
 
 static void amsSetup(int i) {
@@ -221,6 +276,7 @@ static void amsSetup(int i) {
     // AMS is not always published (e.g. right after boot of the iPad); keep trying for a while
     s.amsTries++;
     Serial.printf("[ams] service not found (try %u)\n", s.amsTries);
+    if (s.amsTries == 1 && cl) readIdentity(s, cl);   // a computer has no AMS but still has a name (MC-R63)
     setLink(s, Media::LINK_BLIND);
     if (s.amsTries < 12) s.amsAt = millis() + 5000;
     return;
@@ -229,8 +285,9 @@ static void amsSetup(int i) {
   s.chUpdate = svc->getCharacteristic(AMS_UPDATE);
   s.chAttr   = svc->getCharacteristic(AMS_ATTR);
   if (!s.chRemote || !s.chUpdate) { Serial.println("[ams] characteristics missing"); setLink(s, Media::LINK_BLIND); return; }
-  bool ok = s.chRemote->subscribe(true, i == 0 ? onRemoteCommands<0> : onRemoteCommands<1>) &&
-            s.chUpdate->subscribe(true, i == 0 ? onEntityUpdate<0> : onEntityUpdate<1>);
+  static void (*const onCmds[SLOTS])(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool) = {onRemoteCommands<0>, onRemoteCommands<1>, onRemoteCommands<2>};
+  static void (*const onUpdates[SLOTS])(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool) = {onEntityUpdate<0>, onEntityUpdate<1>, onEntityUpdate<2>};
+  bool ok = s.chRemote->subscribe(true, onCmds[i]) && s.chUpdate->subscribe(true, onUpdates[i]);
   ok = ok && registerAttrs(s, ENT_PLAYER, {PL_NAME, PL_INFO, PL_VOLUME});
   ok = ok && registerAttrs(s, ENT_TRACK, {TR_ARTIST, TR_TITLE, TR_DURATION});
   ok = ok && registerAttrs(s, ENT_QUEUE, {Q_SHUFFLE, Q_REPEAT});
@@ -258,6 +315,7 @@ static void newAddress() {
 void Media::begin(const char* name) {
   prefs.begin("mediactrl", false);
   if (prefs.getBytes("addr", ownAddr, 6) != 6) newAddress();
+  loadNames();
 
   NimBLEDevice::init(name);
   NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
@@ -303,7 +361,11 @@ void Media::tick() {
     quickDrops = 0;
     bool working = false;                   // but never at the cost of a host that's fine (MC-R46)
     for (Slot& s : slots) if (s.conn != 0xFFFF) working = true;
-    if (!working) {
+    if (forgotOne) {
+      // A forgotten device retries with its old keys, and without them its private address can't be told
+      // from a stranger's. So after a forget, refusals never wipe the board until it restarts (MC-R56).
+      Serial.println("[ble] pairing refused 4 times - left alone after a forget");
+    } else if (!working) {
       Serial.println("[ble] pairing refused 4 times - new address");
       forgetPairing();
     }
@@ -316,13 +378,14 @@ void Media::tick() {
   }
 }
 
-// Up to three sources can be live at once: two Bluetooth hosts and the helper over USB.
+// Up to three Bluetooth hosts can be live at once, plus the helper over USB when USB_MEDIA is on.
 // The board stays on the last one that was playing until a different one starts; pausing never
 // moves it. Until any has played, the helper is shown (the board is on its cable). MC-R14a, MC-R42.
-static bool available(int src) {
-  if (src == SRC_HOST) return HostLink::active();
-  portENTER_CRITICAL(&mux); const bool ams = slots[src].np.link == Media::LINK_AMS; portEXIT_CRITICAL(&mux);
-  return ams;
+static bool hostMedia() { return USB_MEDIA && HostLink::active(); }
+static bool available(int src) {   // a keys-only host counts too, so a computer chosen by hand stays (MC-R63)
+  if (src == SRC_HOST) return hostMedia();
+  portENTER_CRITICAL(&mux); const Media::Link l = slots[src].np.link; portEXIT_CRITICAL(&mux);
+  return l == Media::LINK_AMS || l == Media::LINK_BLIND || l == Media::LINK_READY;
 }
 
 static int pickSource() {
@@ -331,7 +394,7 @@ static int pickSource() {
   portENTER_CRITICAL(&mux);
   for (int i = 0; i < SLOTS; i++) playing[i] = slots[i].np.link == Media::LINK_AMS && slots[i].np.state == 1;
   portEXIT_CRITICAL(&mux);
-  const bool hostOn = HostLink::active();
+  const bool hostOn = hostMedia();
   playing[SRC_HOST] = false;
   if (hostOn) { Media::NowPlaying h; HostLink::snapshot(h); playing[SRC_HOST] = h.state == 1; }
 
@@ -358,19 +421,54 @@ int Media::devices(Device* out, int cap) {
     Slot& s = slots[i];
     if (s.conn == 0xFFFF) continue;
     Device& d = out[n++];
+    memset(&d, 0, sizeof d);
     d.id = i; d.shown = i == on;
-    strlcpy(d.name, s.name[0] ? s.name : "Bluetooth", sizeof d.name);
+    const Saved* e = findName(s.id);   // a link without AMS has no name of its own yet
+    strlcpy(d.name, s.name[0] ? s.name : e ? e->name : "Bluetooth", sizeof d.name);
+    strlcpy(d.kind, s.kind[0] ? s.kind : e ? e->kind : "", sizeof d.kind);
+    if (!s.id.isNull()) { memcpy(d.addr, s.id.getVal(), 6); d.addrType = s.id.getType(); }
     portENTER_CRITICAL(&mux); d.state = s.np.state; char app[24]; strlcpy(app, s.np.player, sizeof app); portEXIT_CRITICAL(&mux);
-    snprintf(d.sub, sizeof d.sub, "%s%sBluetooth%s%s", s.kind, s.kind[0] ? " · " : "", app[0] ? " · " : "", app);
+    snprintf(d.sub, sizeof d.sub, "%s%sBluetooth%s%s", d.kind, d.kind[0] ? " · " : "", app[0] ? " · " : "", app);
   }
-  if (HostLink::active() && n < cap) {
+  if (hostMedia() && n < cap) {
     NowPlaying h; HostLink::snapshot(h);
     Device& d = out[n++];
-    d.id = SRC_HOST; d.shown = on == SRC_HOST; d.state = h.state;
+    memset(&d, 0, sizeof d);
+    d.id = SRC_HOST; d.helper = true; d.shown = on == SRC_HOST; d.state = h.state;
     strlcpy(d.name, HostLink::osName(), sizeof d.name);
     snprintf(d.sub, sizeof d.sub, "Helper · USB%s%s", h.player[0] ? " · " : "", h.player);
   }
+  // saved devices that aren't connected (MC-R58)
+  for (int b = 0; b < NimBLEDevice::getNumBonds() && n < cap; b++) {
+    const NimBLEAddress a = NimBLEDevice::getBondedAddress(b);
+    bool connected = false;
+    for (Slot& s : slots) if (s.conn != 0xFFFF && s.id == a) connected = true;
+    if (connected) continue;
+    Device& d = out[n++];
+    memset(&d, 0, sizeof d);
+    d.id = -1; d.saved = true; d.state = -1;
+    memcpy(d.addr, a.getVal(), 6); d.addrType = a.getType();
+    if (const Saved* e = findName(a)) { strlcpy(d.name, e->name, sizeof d.name); strlcpy(d.kind, e->kind, sizeof d.kind); }
+    else snprintf(d.name, sizeof d.name, "Unknown device · %02X:%02X", d.addr[1], d.addr[0]);
+  }
   return n;
+}
+
+bool Media::forget(const Device& d) {   // MC-R52 to MC-R56
+  if (d.id == SRC_HOST) return false;
+  NimBLEAddress a(d.addr, d.addrType);
+  const uint16_t conn = d.id >= 0 && d.id < SLOTS ? slots[d.id].conn : 0xFFFF;
+  forgotOne = true;
+  bool ok = true;
+  if (!d.saved && a.isNull()) {   // linked but never encrypted: nothing stored, just end the link
+    if (conn != 0xFFFF) srv->disconnect(conn);
+  } else {
+    forgetName(a);
+    ok = NimBLEDevice::deleteBond(a);   // ends the link too, if there is one
+    if (conn != 0xFFFF && slots[d.id].conn == conn) srv->disconnect(conn);   // harmless if already gone
+  }
+  Serial.printf("[ble] forgot %s %s%s\n", d.name, a.toString().c_str(), ok ? "" : " (no bond found)");
+  return ok;
 }
 
 void Media::showSource(int id) { if (id >= 0 && id <= SRC_HOST) { shown = id; played = true; } }
@@ -419,8 +517,10 @@ void Media::send(Cmd c) {
   uint16_t u = 0;
   switch (c) {
     case CMD_PLAY: u = U_PLAY; break;            case CMD_PAUSE: u = U_PAUSE; break;
-    case CMD_TOGGLE: u = U_PLAYPAUSE; break;     case CMD_NEXT: u = U_NEXT; break;
-    case CMD_PREV: u = U_PREV; break;            case CMD_VOL_UP: u = U_VOL_UP; break;
+    // macOS ignores Scan Next/Previous; a tap of Fast Forward/Rewind skips, as on Apple's keyboards (MC-R65)
+    case CMD_TOGGLE: u = U_PLAYPAUSE; break;     case CMD_NEXT: u = strcmp(slot.kind, "Mac") ? U_NEXT : U_FF; break;
+    case CMD_PREV: u = strcmp(slot.kind, "Mac") ? U_PREV : U_REW; break;
+    case CMD_VOL_UP: u = U_VOL_UP; break;
     case CMD_VOL_DOWN: u = U_VOL_DOWN; break;    case CMD_MUTE: u = U_MUTE; break;
     default: break;   // skip ±, like, shuffle, repeat have no reliable HID key
   }
@@ -431,7 +531,9 @@ void Media::pairAnother() {   // with a slot free nothing is dropped (MC-R45)
   kickedPeer = NimBLEAddress();
   pairWindowUntil = millis() + 60000;
   if (freeSlot()) { Serial.println("[ble] pair window open 60 s"); return; }
-  const uint16_t drop = slots[shown == 0 ? 1 : 0].conn;
+  int victim = 0;   // the first host that isn't showing
+  while (victim < SLOTS - 1 && victim == shown) victim++;
+  const uint16_t drop = slots[victim].conn;
   NimBLEConnInfo info = srv->getPeerInfoByHandle(drop);
   kickedPeer = info.getIdAddress();
   srv->disconnect(drop);
@@ -442,6 +544,7 @@ bool Media::pairWindow() { return inPairWindow(); }
 
 void Media::forgetPairing() {
   NimBLEDevice::deleteAllBonds();
+  names.clear();
   newAddress();
   prefs.end();
   Serial.println("[ble] bonds wiped, new address - rebooting");

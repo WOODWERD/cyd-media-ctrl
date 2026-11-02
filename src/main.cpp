@@ -19,7 +19,7 @@
 #include "ble_media.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.2.7"
+#define FW_VERSION "0.2.9"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -59,15 +59,20 @@ static int blLevel = BL_FULL;
 static lv_obj_t *lblTitle, *btnBack, *dot, *lblPlayer;
 static lv_obj_t *pgNow, *pgMore, *pgPair, *pgAbout;
 static lv_obj_t *lblTrack, *lblArtist, *barTrack, *barFill, *lblEl, *lblRem;
-static lv_obj_t *btnPrev, *btnPlay, *btnNext, *icoPrev, *icoPlay, *icoNext;
+static lv_obj_t *btnPrev, *btnPlay, *btnNext, *icoPrev, *icoPlay, *icoNext, *icoPair[2];
 static lv_obj_t *lblVolVal, *volFill, *volKnob, *lblMore;
 struct Tile { lv_obj_t *btn, *ico, *lbl, *dot; Media::Cmd cmd; };
 static Tile tiles[6];
 static lv_obj_t *stepNum[3], *stepTxt[3], *lblPairHead, *lblPairFoot;
 static lv_obj_t *lblAboutAddr, *lblAboutShown, *lblAboutLink, *btnForget, *lblForget;
 static lv_obj_t *pgDevices, *lblDevCount;
-struct DevRow { lv_obj_t *btn, *name, *state, *dot, *sub; int id; };
-static DevRow devRows[3];
+#define DEV_ROWS 7                   // six bonds at most, plus the helper (MC-R44, MC-R58)
+struct DevRow { lv_obj_t *btn, *name, *state, *dot, *sub; Media::Device dev; };
+static DevRow devRows[DEV_ROWS];
+static lv_obj_t *devList, *lblSaved, *devNote, *lblDevNote;
+static bool noteNew = false;         // scroll the note into view once it's laid out
+static Media::Device armedDev;       // the row held for forgetting (MC-U14)
+static uint32_t armedAt = 0;
 static lv_obj_t *toast, *toastTxt;
 static uint32_t toastUntil = 0;
 static int page = 0;
@@ -282,17 +287,48 @@ static void vol_tick() {
 static void about_open(lv_event_t*) {
   set_text(lblAboutAddr, Media::address().c_str());
   forgetArmedAt = 0;
-  set_text(lblForget, "Forget pairing");
+  set_text(lblForget, "Forget all devices");
   lv_obj_remove_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
 }
 static void about_close(lv_event_t*) { lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN); }
-static void devices_open(lv_event_t*) { lv_obj_remove_flag(pgDevices, LV_OBJ_FLAG_HIDDEN); }
-static void devices_close(lv_event_t*) { lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN); }
-static void device_event(lv_event_t* e) {
-  Media::showSource(devRows[(intptr_t)lv_event_get_user_data(e)].id);
+static void devices_open(lv_event_t*) {
+  armedAt = 0;
+  lv_obj_add_flag(devNote, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_scroll_to_y(devList, 0, LV_ANIM_OFF);
+  lv_obj_remove_flag(pgDevices, LV_OBJ_FLAG_HIDDEN);
+}
+static void devices_close(lv_event_t*) { armedAt = 0; lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN); }
+static bool same_device(const Media::Device& a, const Media::Device& b) {
+  return a.saved == b.saved && (a.saved || a.id == b.id) && !memcmp(a.addr, b.addr, 6);
+}
+static void device_event(lv_event_t* e) {   // a short tap: confirms a held row, or switches (MC-R47)
+  const Media::Device& d = devRows[(intptr_t)lv_event_get_user_data(e)].dev;
+  if (armedAt) {
+    const bool confirm = same_device(d, armedDev);
+    armedAt = 0;
+    if (!confirm) return;   // anything else puts the row back
+    Media::forget(armedDev);
+    char s[48]; snprintf(s, sizeof s, "Forgot %s", armedDev.name);
+    show_toast(s, 2000);
+    char n[80];   // the device still holds its side of the pairing
+    if (armedDev.kind[0]) snprintf(n, sizeof n, "Also forget Media Ctrl in the %s's Bluetooth settings.", armedDev.kind);
+    else strlcpy(n, "Also forget Media Ctrl in its Bluetooth settings.", sizeof n);
+    set_text(lblDevNote, n);
+    lv_obj_remove_flag(devNote, LV_OBJ_FLAG_HIDDEN);
+    noteNew = true;
+    return;
+  }
+  if (d.saved) { show_toast("Not connected"); return; }
+  Media::showSource(d.id);
   lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN);
   char s[40]; snprintf(s, sizeof s, "Switched to %s", Media::shownName());
   show_toast(s);
+}
+static void device_hold(lv_event_t* e) {   // hold to forget (MC-R52, MC-R57)
+  const Media::Device& d = devRows[(intptr_t)lv_event_get_user_data(e)].dev;
+  if (d.helper) { show_toast("Unplug to remove"); return; }
+  armedDev = d;
+  armedAt = millis();
 }
 static void pair_another_event(lv_event_t*) {
   Media::pairAnother();
@@ -361,6 +397,12 @@ static void build_now(lv_obj_t* scr) {
   lv_obj_set_style_border_width(btnPlay, 0, 0);
   lv_obj_set_style_bg_color(btnPlay, C(C_ACCENT_DOWN), LV_STATE_PRESSED);
   icoPlay = icon(btnPlay, &ic_play, C_ON_ACCENT);
+  for (int i = 0; i < 2; i++) {   // play and pause side by side, for a host that doesn't share its state (MC-R66)
+    icoPair[i] = icon(btnPlay, i ? &ic_pause : &ic_play, C_ON_ACCENT);
+    lv_image_set_scale(icoPair[i], 180);
+    lv_obj_align(icoPair[i], LV_ALIGN_CENTER, i ? 11 : -11, 0);
+    lv_obj_add_flag(icoPair[i], LV_OBJ_FLAG_HIDDEN);
+  }
   lv_obj_add_event_cb(btnPlay, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_TOGGLE);
   btnNext = button(pgNow, 166, 158, 62, 80, R_SMALL);
   icoNext = icon(btnNext, &ic_next, C_TEXT);
@@ -441,7 +483,7 @@ static void build_about(lv_obj_t* scr) {
   lv_obj_add_event_cb(bp, pair_another_event, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* bf = outline_button(pgAbout, 12, 172, 216, 42, "Flip screen");
   lv_obj_add_event_cb(bf, flip_event, LV_EVENT_CLICKED, nullptr);
-  btnForget = outline_button(pgAbout, 12, 220, 216, 42, "Forget pairing", &lblForget);
+  btnForget = outline_button(pgAbout, 12, 220, 216, 42, "Forget all devices", &lblForget);
   lv_obj_set_style_border_color(btnForget, C(C_FAULT), 0);
   lv_obj_set_style_text_color(lblForget, C(C_FAULT_TEXT), 0);
   lv_obj_add_event_cb(btnForget, forget_event, LV_EVENT_CLICKED, nullptr);
@@ -454,17 +496,44 @@ static void build_devices(lv_obj_t* scr) {
   pgDevices = box(scr, 0, 0, SCREEN_W, SCREEN_H, C_BG, 0);
   lv_obj_t* h = label(pgDevices, "Devices", F_TITLE, C_TEXT); lv_obj_set_pos(h, 12, 9);
   lblDevCount = label(pgDevices, "", F_MONO, C_TEXT_2); lv_obj_align(lblDevCount, LV_ALIGN_TOP_RIGHT, -12, 11);
-  for (int i = 0; i < 3; i++) {
+  // The list scrolls when it's longer than the screen; Pair a device and Close stay put (MC-R60)
+  devList = lv_obj_create(pgDevices);
+  lv_obj_remove_style_all(devList);
+  lv_obj_set_pos(devList, 12, 32); lv_obj_set_size(devList, 216, 222);
+  lv_obj_set_flex_flow(devList, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(devList, 5, 0);
+  lv_obj_set_scroll_dir(devList, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(devList, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_set_style_bg_color(devList, C(C_TEXT_2), LV_PART_SCROLLBAR);
+  lv_obj_set_style_width(devList, 3, LV_PART_SCROLLBAR);
+  for (int i = 0; i < DEV_ROWS; i++) {
     DevRow& r = devRows[i];
-    r.btn = button(pgDevices, 12, 32 + i * 63, 216, 58, R_SMALL);
-    lv_obj_add_event_cb(r.btn, device_event, LV_EVENT_CLICKED, (void*)(intptr_t)i);
-    r.name = label(r.btn, "", F_TITLE, C_TEXT); lv_obj_set_pos(r.name, 10, 8);
-    lv_obj_set_size(r.name, 126, lv_font_get_line_height(F_TITLE)); lv_label_set_long_mode(r.name, LV_LABEL_LONG_MODE_DOTS);
-    r.state = label(r.btn, "", F_BODY, C_TEXT_2); lv_obj_align(r.state, LV_ALIGN_TOP_RIGHT, -10, 8);
+    r.btn = button(devList, 0, 0, 216, 58, R_SMALL);
+    lv_obj_remove_flag(r.btn, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(r.btn, device_event, LV_EVENT_SHORT_CLICKED, (void*)(intptr_t)i);
+    lv_obj_add_event_cb(r.btn, device_hold, LV_EVENT_LONG_PRESSED, (void*)(intptr_t)i);
+    r.name = label(r.btn, "", F_TITLE, C_TEXT);
+    lv_obj_set_height(r.name, lv_font_get_line_height(F_TITLE)); lv_label_set_long_mode(r.name, LV_LABEL_LONG_MODE_DOTS);
+    r.state = label(r.btn, "", F_BODY, C_TEXT_2);
     r.dot = mark(r.btn, 0, 0, 6, 6, C_OK, 3);
     r.sub = label(r.btn, "", F_MONO, C_TEXT_2); lv_obj_set_pos(r.sub, 10, 32);
     lv_obj_set_width(r.sub, 194); lv_label_set_long_mode(r.sub, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_add_flag(r.btn, LV_OBJ_FLAG_HIDDEN);
   }
+  lblSaved = label(devList, "SAVED", F_MONO, C_TEXT_2);
+  lv_obj_set_style_text_letter_space(lblSaved, 2, 0);
+  lv_obj_set_style_pad_top(lblSaved, 3, 0);
+  devNote = box(devList, 0, 0, 216, LV_SIZE_CONTENT, C_BG, R_SMALL);   // shown after a forget (MC-U14)
+  lv_obj_set_style_border_width(devNote, 1, 0);
+  lv_obj_set_style_border_color(devNote, C(C_WARN), 0);
+  lv_obj_set_style_pad_all(devNote, 8, 0);
+  lv_obj_set_style_pad_left(devNote, 20, 0);
+  lv_obj_remove_flag(devNote, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* nd = mark(devNote, -12, 5, 6, 6, C_WARN, 3);
+  lv_obj_add_flag(nd, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lblDevNote = label(devNote, "", F_BODY, C_TEXT);
+  lv_obj_set_width(lblDevNote, 186); lv_label_set_long_mode(lblDevNote, LV_LABEL_LONG_MODE_WRAP);
+  lv_obj_add_flag(devNote, LV_OBJ_FLAG_HIDDEN);
   lv_obj_t* bp = outline_button(pgDevices, 12, 260, 102, 48, "Pair a device");
   lv_obj_add_event_cb(bp, pair_another_event, LV_EVENT_CLICKED, nullptr);
   lv_obj_t* bc = ink_button(pgDevices, 126, 260, 102, 48, "Close");
@@ -507,29 +576,55 @@ static void source_label(char* out, size_t cap, const char* app, const char* kin
 
 static void render_devices() {   // MC-S11, while it's open
   if (lv_obj_has_flag(pgDevices, LV_OBJ_FLAG_HIDDEN)) return;
-  Media::Device d[3];
-  const int n = Media::devices(d, 3);
-  char count[16]; snprintf(count, sizeof count, "%d connected", n);
+  Media::Device d[DEV_ROWS];
+  const int n = Media::devices(d, DEV_ROWS);
+  int connected = 0;
+  for (int i = 0; i < n; i++) if (!d[i].saved) connected++;
+  char count[16]; snprintf(count, sizeof count, "%d connected", connected);
   set_text(lblDevCount, count);
   lv_obj_align(lblDevCount, LV_ALIGN_TOP_RIGHT, -12, 11);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < DEV_ROWS; i++) {
     DevRow& r = devRows[i];
     if (i >= n) { lv_obj_add_flag(r.btn, LV_OBJ_FLAG_HIDDEN); continue; }
     lv_obj_remove_flag(r.btn, LV_OBJ_FLAG_HIDDEN);
-    r.id = d[i].id;
-    set_text(r.name, d[i].name);
-    set_text(r.sub, d[i].sub);
+    r.dev = d[i];
+    const bool armed = armedAt && same_device(d[i], armedDev);
+    const bool saved = d[i].saved;
     const bool playing = d[i].state == 1;
-    set_text(r.state, playing ? "Playing" : d[i].state == 0 ? "Paused" : "Idle");
+    const int h = saved ? 48 : 58;   // saved rows are quieter, but keep the 48 px target
+    lv_obj_set_height(r.btn, h);
+    if (armed) {   // the confirm, as in About (MC-U8)
+      char s[48]; snprintf(s, sizeof s, "Forget %s?", d[i].name);
+      set_text(r.name, s);
+      set_text(r.sub, "TAP AGAIN TO FORGET");
+    } else {
+      set_text(r.name, d[i].name);
+      set_text(r.sub, d[i].sub);
+    }
+    lv_obj_set_width(r.name, armed ? 196 : saved ? 96 : 126);   // "Not connected" is wider than "Playing"
+    lv_obj_set_pos(r.name, 10, armed && saved ? 5 : saved ? (h - lv_font_get_line_height(F_TITLE)) / 2 - 1 : 8);
+    lv_obj_set_pos(r.sub, 10, saved ? 28 : 32);
+    lv_obj_set_style_text_color(r.name, C(armed ? C_FAULT_TEXT : C_TEXT), 0);
+    lv_obj_set_style_text_color(r.sub, C(armed ? C_FAULT_TEXT : C_TEXT_2), 0);
+    if (armed || !saved) lv_obj_remove_flag(r.sub, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(r.sub, LV_OBJ_FLAG_HIDDEN);
+    if (armed) { lv_obj_add_flag(r.state, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(r.dot, LV_OBJ_FLAG_HIDDEN); }
+    else { lv_obj_remove_flag(r.state, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(r.dot, LV_OBJ_FLAG_HIDDEN); }
+    set_text(r.state, saved ? "Not connected" : playing ? "Playing" : d[i].state == 0 ? "Paused" : "Idle");
     lv_obj_set_style_text_color(r.state, C(playing ? C_TEXT : C_TEXT_2), 0);
-    lv_obj_align(r.state, LV_ALIGN_TOP_RIGHT, -10, 8);
+    if (saved) lv_obj_align(r.state, LV_ALIGN_RIGHT_MID, -10, 0); else lv_obj_align(r.state, LV_ALIGN_TOP_RIGHT, -10, 8);
     lv_obj_align_to(r.dot, r.state, LV_ALIGN_OUT_LEFT_MID, -5, 0);
     lv_obj_set_style_bg_opa(r.dot, playing ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(r.dot, playing ? 0 : 1, 0);
-    lv_obj_set_style_border_color(r.dot, C(C_TEXT_2), 0);
+    lv_obj_set_style_border_color(r.dot, C(saved ? C_LINE_2 : C_TEXT_2), 0);
     lv_obj_set_style_bg_color(r.btn, C(d[i].shown ? C_TINT : C_SURFACE), 0);
-    lv_obj_set_style_border_color(r.btn, C(d[i].shown ? C_ACCENT : C_LINE), 0);
+    lv_obj_set_style_bg_opa(r.btn, saved && !armed ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(r.btn, C(armed ? C_FAULT : d[i].shown ? C_ACCENT : C_LINE), 0);
   }
+  // "SAVED" sits between the connected rows and the saved ones; the note goes last
+  if (connected < n) { lv_obj_remove_flag(lblSaved, LV_OBJ_FLAG_HIDDEN); lv_obj_move_to_index(lblSaved, connected); }
+  else lv_obj_add_flag(lblSaved, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_to_index(devNote, -1);
+  if (noteNew) { noteNew = false; lv_obj_update_layout(devList); lv_obj_scroll_to_view(devNote, LV_ANIM_ON); }
 }
 
 static void layout_track_text(const char* title) {
@@ -554,7 +649,8 @@ static void render() {
   lv_obj_set_style_bg_color(dot, C(pairing ? C_WARN : C_OK), 0);
   char source[48];
   source_label(source, sizeof source, np.player, Media::shownKind(), Media::shownName());
-  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? source : "keys only");
+  const char* kind = Media::shownKind();
+  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? source : kind[0] ? kind : "keys only");   // "Mac" over Bluetooth
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
   set_text(lblTitle, another ? "Pairing" : pairing ? "Not connected" : "Media Ctrl");
@@ -602,7 +698,8 @@ static void render() {
     set_text(lblArtist, nothing ? (!host ? "Start something on your device, or press play to resume the last app."
                                        : !strcmp(Media::shownKind(), "Windows") ? "Start something on the PC, or press play to resume."
                                        : "Start Spotify or Music on the Mac, or press play to resume.")
-                                : "Track info needs an iPad or iPhone, or the helper on a computer. The buttons still work.");
+                                : !strcmp(Media::shownKind(), "Mac") ? "The buttons control the Mac. Macs don't share what's playing over Bluetooth, so there's no track info yet."
+                                : "The buttons work. This device doesn't share what's playing.");
   }
 
   // progress
@@ -621,6 +718,9 @@ static void render() {
   // transport
   const bool playing = np.state == 1;
   lv_image_set_src(icoPlay, playing ? &ic_pause : &ic_play);
+  const bool knowsState = ams;   // keys only: the host never says whether it is playing
+  if (knowsState || !linked) lv_obj_remove_flag(icoPlay, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(icoPlay, LV_OBJ_FLAG_HIDDEN);
+  for (lv_obj_t* ic : icoPair) { if (knowsState || !linked) lv_obj_add_flag(ic, LV_OBJ_FLAG_HIDDEN); else lv_obj_remove_flag(ic, LV_OBJ_FLAG_HIDDEN); }
   const bool canSkip = !nothing && Media::supports(np, Media::CMD_NEXT);
   const bool canBack = !nothing && Media::supports(np, Media::CMD_PREV);
   for (int i = 0; i < 2; i++) {
@@ -670,7 +770,8 @@ static void ui_tick(lv_timer_t*) {
   render();
   vol_tick();
   if (toastUntil && millis() > toastUntil) { lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN); toastUntil = 0; }
-  if (forgetArmedAt && millis() - forgetArmedAt > 4000) { forgetArmedAt = 0; set_text(lblForget, "Forget pairing"); }
+  if (forgetArmedAt && millis() - forgetArmedAt > 4000) { forgetArmedAt = 0; set_text(lblForget, "Forget all devices"); }
+  if (armedAt && millis() - armedAt > 4000) armedAt = 0;   // the held row goes back (MC-U14)
 
   const int target = (DIM_AFTER_MS > 0 && lv_display_get_inactive_time(NULL) > DIM_AFTER_MS) ? BL_DIM : BL_FULL;
   if (blLevel != target) {

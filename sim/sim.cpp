@@ -16,16 +16,32 @@ void Media::send(Cmd) {}
 void Media::forgetPairing() {}
 void Media::pairAnother() {}
 bool Media::pairWindow() { return false; }
+static bool simSaved = false;   // false: three connected; true: iPhone and Mac, iPad and an unnamed bond saved
 int Media::devices(Device* d, int cap) {
-  const char* name[3] = {"My iPhone", "My iPad", "Mac"};
-  const char* sub[3] = {"iPhone · Bluetooth · Spotify", "iPad · Bluetooth · YouTube", "Helper · USB · Spotify"};
-  for (int i = 0; i < 3; i++) { d[i].id = i; strlcpy(d[i].name, name[i], 24); strlcpy(d[i].sub, sub[i], 48); d[i].state = i == 0; d[i].shown = i == 0; }
-  return 3;
+  struct Row { const char *name, *sub, *kind; int id; bool saved; uint8_t a; };
+  static const Row all[3] = {{"My iPhone", "iPhone · Bluetooth · Spotify", "iPhone", 0, false, 1},
+                             {"My iPad", "iPad · Bluetooth · YouTube", "iPad", 1, false, 2},
+                             {"MacBook Pro", "Mac · Bluetooth", "Mac", 2, false, 4}};
+  static const Row withSaved[4] = {{"My iPhone", "iPhone · Bluetooth · Spotify", "iPhone", 0, false, 1},
+                                   {"MacBook Pro", "Mac · Bluetooth", "Mac", 2, false, 4},
+                                   {"My iPad", "", "iPad", -1, true, 2},
+                                   {"Unknown device · 1E:EA", "", "", -1, true, 3}};
+  const Row* rows = simSaved ? withSaved : all;
+  const int n = simSaved ? 4 : 3;
+  for (int i = 0; i < n && i < cap; i++) {
+    memset(&d[i], 0, sizeof d[i]);
+    d[i].id = rows[i].id; d[i].saved = rows[i].saved; d[i].addr[0] = rows[i].a;
+    strlcpy(d[i].name, rows[i].name, sizeof d[i].name); strlcpy(d[i].sub, rows[i].sub, sizeof d[i].sub);
+    strlcpy(d[i].kind, rows[i].kind, sizeof d[i].kind);
+    d[i].state = rows[i].saved ? -1 : i == 0; d[i].shown = i == 0;
+  }
+  return n;
 }
+bool Media::forget(const Device&) { return true; }
 void Media::showSource(int) {}
 void Media::setVolume(int) {}
-const char* Media::shownName() { return fx.link == LINK_HOST ? "Mac" : "My iPhone"; }
-const char* Media::shownKind() { return fx.link == LINK_HOST ? "Mac" : "iPhone"; }
+const char* Media::shownName() { return fx.link == LINK_HOST ? "Mac" : fx.link == LINK_BLIND ? "MacBook Pro" : "My iPhone"; }
+const char* Media::shownKind() { return fx.link == LINK_HOST || fx.link == LINK_BLIND ? "Mac" : "iPhone"; }   // keys only: a Mac over Bluetooth
 String Media::address() { return String("D7:3A:91:5C:0E:42"); }
 void HostLink::begin(const char*) {}
 void HostLink::tick() {}
@@ -74,7 +90,15 @@ int main() {
   fx.supported = 0x0FFF; fx.rev++;
   dump("3_now_playing_paused");
   fx.state = 1; fx.rate = 1; fx.elapsedAt = g_millis; fx.rev++; dump("4_now_playing");
-  devices_open(nullptr); dump("13_devices"); devices_close(nullptr);
+  devices_open(nullptr); dump("13_devices");
+  armedDev = devRows[1].dev; armedAt = g_millis; dump("14_devices_confirm");   // the iPad held (MC-U14)
+  devices_close(nullptr);
+  simSaved = true;
+  devices_open(nullptr); dump("15_devices_saved");
+  armedDev = devRows[2].dev; armedAt = g_millis; dump("16_devices_saved_confirm");
+  lv_obj_send_event(devRows[2].btn, LV_EVENT_SHORT_CLICKED, nullptr); dump("17_devices_forgot");
+  devices_close(nullptr);
+  simSaved = false;
   strcpy(fx.title, "Weightless"); strcpy(fx.artist, "Señor Coconut · Ærø Café — Ünïcødé test"); fx.rev++; dump("5_short_title");
   set_page(1); dump("6_more");
   set_page(0);
@@ -92,5 +116,8 @@ int main() {
   fx.title[0] = fx.artist[0] = fx.player[0] = 0; fx.state = -1; fx.duration = 0;
   fx.supported = (1u << Media::CMD_TOGGLE) | (1u << Media::CMD_PLAY) | (1u << Media::CMD_VOL_UP) | (1u << Media::CMD_VOL_DOWN) | (1u << 15); fx.rev++;
   dump("12_mac_idle");
+  lv_mem_monitor_t m; lv_mem_monitor(&m);   // headroom in LVGL's pool (LV_MEM_SIZE)
+  fprintf(stderr, "lvgl pool: %u of %u bytes used at most, %u free now\n",
+          (unsigned)m.max_used, (unsigned)m.total_size, (unsigned)m.free_size);
   return 0;
 }
