@@ -1,4 +1,4 @@
-// Media Ctrl — a Bluetooth media remote for the iPad on the Cheap Yellow Display (ESP32-2432S028R).
+// Media Ctrl — a media remote for iPad, iPhone, Mac and Windows on the Cheap Yellow Display (ESP32-2432S028R).
 // WOODWERD LLC · MIT licence.
 //
 // Portrait, 240 × 320. Pairs with the iPad as a Bluetooth media-key device and, through Apple Media
@@ -6,6 +6,7 @@
 //   Page 1  NOW PLAYING   title · artist · progress · PREV / PLAY-PAUSE / NEXT · volume
 //   Page 2  MORE          −15 s · +15 s · shuffle · repeat · like · mute          (swipe left)
 // Long-press the title for About: Bluetooth address, flip screen, forget pairing.
+// Long-press the source at the top right for Devices: every reachable host, tap one to show it.
 // LVGL 9 + TFT_eSPI + XPT2046 + NimBLE.
 
 #include <Arduino.h>
@@ -18,7 +19,7 @@
 #include "ble_media.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.2.6"
+#define FW_VERSION "0.2.7"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -59,11 +60,14 @@ static lv_obj_t *lblTitle, *btnBack, *dot, *lblPlayer;
 static lv_obj_t *pgNow, *pgMore, *pgPair, *pgAbout;
 static lv_obj_t *lblTrack, *lblArtist, *barTrack, *barFill, *lblEl, *lblRem;
 static lv_obj_t *btnPrev, *btnPlay, *btnNext, *icoPrev, *icoPlay, *icoNext;
-static lv_obj_t *btnVolDn, *btnVolUp, *lblVolVal, *volFill, *pgDot[2];
-struct Tile { lv_obj_t *btn, *ico, *lbl; Media::Cmd cmd; };
+static lv_obj_t *lblVolVal, *volFill, *volKnob, *lblMore;
+struct Tile { lv_obj_t *btn, *ico, *lbl, *dot; Media::Cmd cmd; };
 static Tile tiles[6];
 static lv_obj_t *stepNum[3], *stepTxt[3], *lblPairHead, *lblPairFoot;
-static lv_obj_t *lblAboutAddr, *lblAboutLink, *btnForget, *lblForget;
+static lv_obj_t *lblAboutAddr, *lblAboutShown, *lblAboutLink, *btnForget, *lblForget;
+static lv_obj_t *pgDevices, *lblDevCount;
+struct DevRow { lv_obj_t *btn, *name, *state, *dot, *sub; int id; };
+static DevRow devRows[3];
 static lv_obj_t *toast, *toastTxt;
 static uint32_t toastUntil = 0;
 static int page = 0;
@@ -72,6 +76,10 @@ static uint32_t forgetArmedAt = 0;
 static Media::NowPlaying np;
 static uint32_t shownRev = 0xFFFFFFFF;
 static char lastTitle[160] = "";
+#define VOL_W 160
+static int volTarget = -1, volSent = -1, volRef = 0;   // the level the slider asked for, -1 = none
+static bool volDragging = false;
+static uint32_t volUntil = 0;
 
 // ---------------- display / touch glue ----------------
 static void flush_cb(lv_display_t* disp, const lv_area_t* a, uint8_t* px) {
@@ -125,6 +133,11 @@ static lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, uint32_t colo
   lv_obj_add_flag(o, LV_OBJ_FLAG_GESTURE_BUBBLE);
   return o;
 }
+static lv_obj_t* mark(lv_obj_t* parent, int x, int y, int w, int h, uint32_t color, int radius) {   // never takes a touch
+  lv_obj_t* o = box(parent, x, y, w, h, color, radius);
+  lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+  return o;
+}
 static lv_obj_t* page_box(lv_obj_t* parent) {
   lv_obj_t* p = box(parent, 0, 0, SCREEN_W, SCREEN_H, C_BG, 0);
   lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, 0);
@@ -166,6 +179,22 @@ static lv_obj_t* button(lv_obj_t* parent, int x, int y, int w, int h, int radius
   lv_obj_add_flag(b, LV_OBJ_FLAG_GESTURE_BUBBLE);
   return b;
 }
+static lv_obj_t* ink_button(lv_obj_t* parent, int x, int y, int w, int h, const char* text) {
+  lv_obj_t* b = button(parent, x, y, w, h, R_SMALL);
+  lv_obj_set_style_bg_color(b, C(C_TEXT), 0);
+  lv_obj_set_style_bg_color(b, C(C_TEXT_2), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(b, 0, 0);
+  lv_obj_t* l = label(b, text, F_TITLE, C_ON_ACCENT); lv_obj_center(l);
+  return b;
+}
+static lv_obj_t* outline_button(lv_obj_t* parent, int x, int y, int w, int h, const char* text, lv_obj_t** lbl = nullptr) {
+  lv_obj_t* b = button(parent, x, y, w, h, R_SMALL);
+  lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_color(b, C(C_LINE_2), 0);
+  lv_obj_t* l = label(b, text, F_TITLE, C_TEXT); lv_obj_center(l);
+  if (lbl) *lbl = l;
+  return b;
+}
 static void set_enabled(lv_obj_t* b, bool on) {
   if (on) lv_obj_remove_state(b, LV_STATE_DISABLED); else lv_obj_add_state(b, LV_STATE_DISABLED);
 }
@@ -193,13 +222,13 @@ static void set_page(int p) {
   else        { lv_obj_add_flag(pgNow, LV_OBJ_FLAG_HIDDEN);    lv_obj_remove_flag(pgMore, LV_OBJ_FLAG_HIDDEN); }
   if (p == 0) { lv_obj_remove_flag(lblTitle, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(btnBack, LV_OBJ_FLAG_HIDDEN); }
   else        { lv_obj_add_flag(lblTitle, LV_OBJ_FLAG_HIDDEN);    lv_obj_remove_flag(btnBack, LV_OBJ_FLAG_HIDDEN); }
-  lv_obj_set_style_bg_color(pgDot[0], C(p == 0 ? C_TEXT : C_LINE_2), 0);
-  lv_obj_set_style_bg_color(pgDot[1], C(p == 1 ? C_TEXT : C_LINE_2), 0);
+  set_text(lblMore, p == 0 ? "More" : "Back");
 }
 
 static void gesture_event(lv_event_t*) {
   lv_dir_t d = lv_indev_get_gesture_dir(lv_indev_active());
-  if (!lv_obj_has_flag(pgPair, LV_OBJ_FLAG_HIDDEN) || !lv_obj_has_flag(pgAbout, LV_OBJ_FLAG_HIDDEN)) return;
+  if (!lv_obj_has_flag(pgPair, LV_OBJ_FLAG_HIDDEN) || !lv_obj_has_flag(pgAbout, LV_OBJ_FLAG_HIDDEN) ||
+      !lv_obj_has_flag(pgDevices, LV_OBJ_FLAG_HIDDEN)) return;
   if (d == LV_DIR_LEFT && page == 0) { set_page(1); swallowUntil = millis() + 400; }
   else if (d == LV_DIR_RIGHT && page == 1) { set_page(0); swallowUntil = millis() + 400; }
 }
@@ -219,23 +248,56 @@ static void cmd_event(lv_event_t* e) {
   }
 }
 static void back_event(lv_event_t*) { set_page(0); }
-static void vol_zone_event(lv_event_t*) { if (!swallowed()) set_page(page ? 0 : 1); }
+static void more_event(lv_event_t*) { if (!swallowed()) set_page(page ? 0 : 1); }
+
+// The slider (MC-R48 to MC-R50). It holds its own gestures, so a drag never changes page.
+static void vol_event(lv_event_t* e) {
+  const lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) { volDragging = false; volUntil = millis() + 2000; return; }
+  lv_point_t p; lv_indev_get_point(lv_indev_active(), &p);
+  lv_area_t a; lv_obj_get_coords((lv_obj_t*)lv_event_get_current_target(e), &a);
+  const int level = constrain((p.x - a.x1 - 11) * 100 / (VOL_W - 22), 0, 100);
+  if (code == LV_EVENT_PRESSED) { volDragging = true; volRef = level; volSent = -1; }
+  volTarget = level; volUntil = millis() + 2000;
+}
+
+// Every 200 ms. Helpers take the exact level. AMS and media keys only step, so walk towards it.
+static void vol_tick() {
+  static uint8_t beat = 0;
+  if (volTarget < 0 || (++beat & 1)) return;
+  if (np.link == Media::LINK_HOST) {
+    if (volTarget != volSent) { Media::setVolume(volTarget); volSent = volTarget; }
+  } else if (np.volume >= 0) {
+    const int d = volTarget - np.volume;
+    if (abs(d) >= 4) Media::send(d > 0 ? Media::CMD_VOL_UP : Media::CMD_VOL_DOWN);
+    else if (!volDragging) volTarget = -1;
+  } else if (abs(volTarget - volRef) >= 8) {   // no level to follow: one step for each 8 of drag
+    const bool up = volTarget > volRef;
+    Media::send(up ? Media::CMD_VOL_UP : Media::CMD_VOL_DOWN);
+    volRef += up ? 8 : -8;
+  }
+  if (!volDragging && (int32_t)(millis() - volUntil) > 0) volTarget = -1;
+}
 
 static void about_open(lv_event_t*) {
   set_text(lblAboutAddr, Media::address().c_str());
   forgetArmedAt = 0;
-  set_text(lblForget, "FORGET PAIRING");
+  set_text(lblForget, "Forget pairing");
   lv_obj_remove_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
 }
 static void about_close(lv_event_t*) { lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN); }
-static void source_event(lv_event_t*) {
-  if (!Media::switchSource()) { show_toast("Only one device"); return; }
+static void devices_open(lv_event_t*) { lv_obj_remove_flag(pgDevices, LV_OBJ_FLAG_HIDDEN); }
+static void devices_close(lv_event_t*) { lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN); }
+static void device_event(lv_event_t* e) {
+  Media::showSource(devRows[(intptr_t)lv_event_get_user_data(e)].id);
+  lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN);
   char s[40]; snprintf(s, sizeof s, "Switched to %s", Media::shownName());
   show_toast(s);
 }
 static void pair_another_event(lv_event_t*) {
   Media::pairAnother();
   lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN);
 }
 static void flip_event(lv_event_t*) {
   rot = rot == 0 ? 2 : 0;
@@ -244,12 +306,12 @@ static void flip_event(lv_event_t*) {
 }
 static void forget_event(lv_event_t*) {
   if (forgetArmedAt && millis() - forgetArmedAt < 4000) {
-    set_text(lblForget, "FORGETTING…");
+    set_text(lblForget, "Forgetting…");
     lv_refr_now(NULL);
     Media::forgetPairing();   // reboots
   }
   forgetArmedAt = millis();
-  set_text(lblForget, "TAP AGAIN TO FORGET");
+  set_text(lblForget, "Tap again to forget");
 }
 
 // ---------------- build ----------------
@@ -271,8 +333,8 @@ static void build_top(lv_obj_t* scr) {
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
   lv_obj_add_flag(lblPlayer, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_ext_click_area(lblPlayer, 18);
-  lv_obj_add_event_cb(lblPlayer, source_event, LV_EVENT_LONG_PRESSED, nullptr);
-  dot = box(scr, 0, 0, 6, 6, C_WARN, 3);
+  lv_obj_add_event_cb(lblPlayer, devices_open, LV_EVENT_LONG_PRESSED, nullptr);
+  dot = mark(scr, 0, 0, 6, 6, C_WARN, 3);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
 }
 
@@ -286,21 +348,21 @@ static void build_now(lv_obj_t* scr) {
   lv_obj_set_width(lblArtist, 216);
   lv_label_set_long_mode(lblArtist, LV_LABEL_LONG_MODE_DOTS);
 
-  barTrack = box(pgNow, 12, 128, 216, 4, C_LINE, 2);
-  barFill = box(barTrack, 0, 0, 0, 4, C_ACCENT, 2);
-  lblEl = label(pgNow, "", F_MONO, C_TEXT_2);  lv_obj_set_pos(lblEl, 12, 137);
-  lblRem = label(pgNow, "", F_MONO, C_TEXT_2); lv_obj_align(lblRem, LV_ALIGN_TOP_RIGHT, -12, 137);
+  barTrack = mark(pgNow, 12, 125, 216, 4, C_LINE, 2);
+  barFill = mark(barTrack, 0, 0, 0, 4, C_ACCENT, 2);
+  lblEl = label(pgNow, "", F_MONO, C_TEXT_2);  lv_obj_set_pos(lblEl, 12, 135);
+  lblRem = label(pgNow, "", F_MONO, C_TEXT_2); lv_obj_align(lblRem, LV_ALIGN_TOP_RIGHT, -12, 135);
 
-  btnPrev = button(pgNow, 12, 171, 61, 80, R_BIG);
+  btnPrev = button(pgNow, 12, 158, 62, 80, R_SMALL);
   icoPrev = icon(btnPrev, &ic_prev, C_TEXT);
   lv_obj_add_event_cb(btnPrev, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_PREV);
-  btnPlay = button(pgNow, 80, 171, 80, 80, R_BIG);
+  btnPlay = button(pgNow, 80, 158, 80, 80, R_SMALL);
   lv_obj_set_style_bg_color(btnPlay, C(C_ACCENT), 0);
   lv_obj_set_style_border_width(btnPlay, 0, 0);
-  lv_obj_set_style_bg_color(btnPlay, C(0x25AE5E), LV_STATE_PRESSED);
+  lv_obj_set_style_bg_color(btnPlay, C(C_ACCENT_DOWN), LV_STATE_PRESSED);
   icoPlay = icon(btnPlay, &ic_play, C_ON_ACCENT);
   lv_obj_add_event_cb(btnPlay, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_TOGGLE);
-  btnNext = button(pgNow, 167, 171, 61, 80, R_BIG);
+  btnNext = button(pgNow, 166, 158, 62, 80, R_SMALL);
   icoNext = icon(btnNext, &ic_next, C_TEXT);
   lv_obj_add_event_cb(btnNext, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_NEXT);
 }
@@ -316,7 +378,8 @@ static void build_more(lv_obj_t* scr) {
   for (int i = 0; i < 6; i++) {
     Tile& t = tiles[i];
     t.cmd = defs[i].cmd;
-    t.btn = button(pgMore, 12 + (i % 2) * 112, 36 + (i / 2) * 69, 104, 62, R_SMALL);
+    t.btn = button(pgMore, 12 + (i % 2) * 111, 36 + (i / 2) * 72, 105, 66, R_SMALL);
+    t.dot = mark(t.btn, 91, 8, 6, 6, C_OK, 3);
     t.ico = icon(t.btn, defs[i].ic, C_TEXT); lv_obj_align(t.ico, LV_ALIGN_CENTER, 0, -9);
     t.lbl = label(t.btn, defs[i].name, F_MONO, C_TEXT_2); lv_obj_align(t.lbl, LV_ALIGN_CENTER, 0, 16);
     lv_obj_add_event_cb(t.btn, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)t.cmd);
@@ -324,36 +387,30 @@ static void build_more(lv_obj_t* scr) {
 }
 
 static void build_volume(lv_obj_t* scr) {
-  btnVolDn = button(scr, 12, 258, 50, 50, R_SMALL);
-  icon(btnVolDn, &ic_minus, C_TEXT);
-  lv_obj_add_event_cb(btnVolDn, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_VOL_DOWN);
-  btnVolUp = button(scr, 178, 258, 50, 50, R_SMALL);
-  icon(btnVolUp, &ic_plus, C_TEXT);
-  lv_obj_add_event_cb(btnVolUp, cmd_event, LV_EVENT_CLICKED, (void*)(intptr_t)Media::CMD_VOL_UP);
+  lv_obj_t* zone = box(scr, 12, 258, VOL_W, 50, C_BG, 0);
+  lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, 0);
+  lv_obj_remove_flag(zone, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  for (lv_event_code_t c : {LV_EVENT_PRESSED, LV_EVENT_PRESSING, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
+    lv_obj_add_event_cb(zone, vol_event, c, nullptr);
+  label(zone, "VOL", F_MONO, C_TEXT_2);
+  lblVolVal = label(zone, "", F_MONO, C_TEXT); lv_obj_align(lblVolVal, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_t* track = mark(zone, 0, 28, VOL_W, 6, C_LINE, 3);
+  volFill = mark(track, 0, 0, 0, 6, C_TEXT_2, 3);
+  volKnob = mark(zone, 0, 20, 22, 22, C_TEXT, 11);
 
-  // middle zone: tap flips pages too (the dots live here)
-  lv_obj_t* zone = lv_button_create(scr);
-  lv_obj_remove_style_all(zone);
-  lv_obj_set_pos(zone, 66, 258); lv_obj_set_size(zone, 108, 50);
-  lv_obj_add_flag(zone, LV_OBJ_FLAG_GESTURE_BUBBLE);
-  lv_obj_add_event_cb(zone, vol_zone_event, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t* l = label(zone, "VOL", F_MONO, C_TEXT_2); lv_obj_set_pos(l, 3, 10);
-  lblVolVal = label(zone, "", F_MONO, C_TEXT); lv_obj_align(lblVolVal, LV_ALIGN_TOP_RIGHT, -3, 10);
-  pgDot[0] = box(zone, 46, 13, 4, 4, C_TEXT, 2);
-  pgDot[1] = box(zone, 54, 13, 4, 4, C_LINE_2, 2);
-  lv_obj_t* vb = box(zone, 3, 28, 102, 4, C_LINE, 2);
-  volFill = box(vb, 0, 0, 0, 4, C_TEXT, 2);
+  lv_obj_t* more = outline_button(scr, 180, 258, 48, 50, "More", &lblMore);
+  lv_obj_add_event_cb(more, more_event, LV_EVENT_CLICKED, nullptr);
 }
 
 static void build_pair(lv_obj_t* scr) {
   pgPair = box(scr, 0, 32, SCREEN_W, SCREEN_H - 32, C_BG, 0);
   lv_obj_t* card = box(pgPair, 12, 4, 216, SCREEN_H - 32 - 16, C_SURFACE, R_BIG);
   lv_obj_set_style_border_width(card, 1, 0); lv_obj_set_style_border_color(card, C(C_LINE), 0);
-  lblPairHead = label(card, "Pair an iPad or Mac", F_HEAD, C_TEXT); lv_obj_set_pos(lblPairHead, 14, 16);
-  const char* steps[3] = { "Open Bluetooth settings on the iPad or Mac.", "Pick Media Ctrl from the list of devices.", "Confirm with Pair or Connect." };
+  lblPairHead = label(card, "Pair a device", F_HEAD, C_TEXT); lv_obj_set_pos(lblPairHead, 14, 16);
+  const char* steps[3] = { "Open Bluetooth settings on your device.", "Pick Media Ctrl from the list of devices.", "Confirm with Pair or Connect." };
   for (int i = 0; i < 3; i++) {
     const int y = 58 + i * 58;
-    stepNum[i] = box(card, 14, y, 22, 22, C_SURFACE, 11);
+    stepNum[i] = mark(card, 14, y, 22, 22, C_SURFACE, 11);
     lv_obj_set_style_border_width(stepNum[i], 1, 0);
     char n[2] = { (char)('1' + i), 0 };
     lv_obj_t* nl = label(stepNum[i], n, F_MONO, C_TEXT_2); lv_obj_center(nl);
@@ -376,24 +433,43 @@ static void build_about(lv_obj_t* scr) {
     lv_obj_t* vl = label(pgAbout, "", F_MONO, C_TEXT); lv_obj_set_pos(vl, 92, y);
     return vl;
   };
-  lv_obj_t* nm = row(66, "NAME"); lv_label_set_text(nm, BLE_NAME);
-  lblAboutAddr = row(84, "ADDRESS");
-  lblAboutLink = row(102, "NOW PLAYING");
+  lblAboutAddr = row(66, "ADDRESS");
+  lblAboutShown = row(84, "SHOWING");
+  lblAboutLink = row(102, "THROUGH");
 
-  lv_obj_t* bp = button(pgAbout, 12, 124, 216, 42, R_SMALL);
-  lv_obj_t* lp = label(bp, "PAIR ANOTHER DEVICE", F_TITLE, C_TEXT); lv_obj_center(lp);
+  lv_obj_t* bp = outline_button(pgAbout, 12, 124, 216, 42, "Pair a device");
   lv_obj_add_event_cb(bp, pair_another_event, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t* bf = button(pgAbout, 12, 172, 216, 42, R_SMALL);
-  lv_obj_t* lf = label(bf, "FLIP SCREEN", F_TITLE, C_TEXT); lv_obj_center(lf);
+  lv_obj_t* bf = outline_button(pgAbout, 12, 172, 216, 42, "Flip screen");
   lv_obj_add_event_cb(bf, flip_event, LV_EVENT_CLICKED, nullptr);
-  btnForget = button(pgAbout, 12, 220, 216, 42, R_SMALL);
-  lv_obj_set_style_border_color(btnForget, C(0x6B2A2A), 0);
-  lblForget = label(btnForget, "FORGET PAIRING", F_TITLE, 0xFF8F85); lv_obj_center(lblForget);
+  btnForget = outline_button(pgAbout, 12, 220, 216, 42, "Forget pairing", &lblForget);
+  lv_obj_set_style_border_color(btnForget, C(C_FAULT), 0);
+  lv_obj_set_style_text_color(lblForget, C(C_FAULT_TEXT), 0);
   lv_obj_add_event_cb(btnForget, forget_event, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t* bc = button(pgAbout, 12, 268, 216, 42, R_SMALL);
-  lv_obj_t* lc = label(bc, "CLOSE", F_TITLE, C_TEXT); lv_obj_center(lc);
+  lv_obj_t* bc = ink_button(pgAbout, 12, 268, 216, 42, "Close");
   lv_obj_add_event_cb(bc, about_close, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_devices(lv_obj_t* scr) {
+  pgDevices = box(scr, 0, 0, SCREEN_W, SCREEN_H, C_BG, 0);
+  lv_obj_t* h = label(pgDevices, "Devices", F_TITLE, C_TEXT); lv_obj_set_pos(h, 12, 9);
+  lblDevCount = label(pgDevices, "", F_MONO, C_TEXT_2); lv_obj_align(lblDevCount, LV_ALIGN_TOP_RIGHT, -12, 11);
+  for (int i = 0; i < 3; i++) {
+    DevRow& r = devRows[i];
+    r.btn = button(pgDevices, 12, 32 + i * 63, 216, 58, R_SMALL);
+    lv_obj_add_event_cb(r.btn, device_event, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+    r.name = label(r.btn, "", F_TITLE, C_TEXT); lv_obj_set_pos(r.name, 10, 8);
+    lv_obj_set_size(r.name, 126, lv_font_get_line_height(F_TITLE)); lv_label_set_long_mode(r.name, LV_LABEL_LONG_MODE_DOTS);
+    r.state = label(r.btn, "", F_BODY, C_TEXT_2); lv_obj_align(r.state, LV_ALIGN_TOP_RIGHT, -10, 8);
+    r.dot = mark(r.btn, 0, 0, 6, 6, C_OK, 3);
+    r.sub = label(r.btn, "", F_MONO, C_TEXT_2); lv_obj_set_pos(r.sub, 10, 32);
+    lv_obj_set_width(r.sub, 194); lv_label_set_long_mode(r.sub, LV_LABEL_LONG_MODE_DOTS);
+  }
+  lv_obj_t* bp = outline_button(pgDevices, 12, 260, 102, 48, "Pair a device");
+  lv_obj_add_event_cb(bp, pair_another_event, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t* bc = ink_button(pgDevices, 126, 260, 102, 48, "Close");
+  lv_obj_add_event_cb(bc, devices_close, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_flag(pgDevices, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void ui_build() {
@@ -408,6 +484,7 @@ static void ui_build() {
   build_more(scr);
   build_volume(scr);
   build_pair(scr);
+  build_devices(scr);
 
   toast = box(scr, 0, 150, 120, 30, C_SURFACE_HI, 15);
   toastTxt = label(toast, "", F_TITLE, C_TEXT); lv_obj_center(toastTxt);
@@ -423,9 +500,36 @@ static void source_label(char* out, size_t cap, const char* app, const char* kin
   if (!app[0]) { strlcpy(out, kind[0] ? kind : name, cap); return; }
   if (!kind[0]) { strlcpy(out, app, cap); return; }
   const int room = 20 - (int)strlen(kind);
-  int n = min((int)strlen(app), room);
+  int n = (int)strlen(app) < room ? (int)strlen(app) : room;
   while (n > 0 && ((uint8_t)app[n] & 0xC0) == 0x80) n--;   // never cut a UTF-8 sequence in half
   snprintf(out, cap, "%.*s %s", n, app, kind);
+}
+
+static void render_devices() {   // MC-S11, while it's open
+  if (lv_obj_has_flag(pgDevices, LV_OBJ_FLAG_HIDDEN)) return;
+  Media::Device d[3];
+  const int n = Media::devices(d, 3);
+  char count[16]; snprintf(count, sizeof count, "%d connected", n);
+  set_text(lblDevCount, count);
+  lv_obj_align(lblDevCount, LV_ALIGN_TOP_RIGHT, -12, 11);
+  for (int i = 0; i < 3; i++) {
+    DevRow& r = devRows[i];
+    if (i >= n) { lv_obj_add_flag(r.btn, LV_OBJ_FLAG_HIDDEN); continue; }
+    lv_obj_remove_flag(r.btn, LV_OBJ_FLAG_HIDDEN);
+    r.id = d[i].id;
+    set_text(r.name, d[i].name);
+    set_text(r.sub, d[i].sub);
+    const bool playing = d[i].state == 1;
+    set_text(r.state, playing ? "Playing" : d[i].state == 0 ? "Paused" : "Idle");
+    lv_obj_set_style_text_color(r.state, C(playing ? C_TEXT : C_TEXT_2), 0);
+    lv_obj_align(r.state, LV_ALIGN_TOP_RIGHT, -10, 8);
+    lv_obj_align_to(r.dot, r.state, LV_ALIGN_OUT_LEFT_MID, -5, 0);
+    lv_obj_set_style_bg_opa(r.dot, playing ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(r.dot, playing ? 0 : 1, 0);
+    lv_obj_set_style_border_color(r.dot, C(C_TEXT_2), 0);
+    lv_obj_set_style_bg_color(r.btn, C(d[i].shown ? C_TINT : C_SURFACE), 0);
+    lv_obj_set_style_border_color(r.btn, C(d[i].shown ? C_ACCENT : C_LINE), 0);
+  }
 }
 
 static void layout_track_text(const char* title) {
@@ -447,7 +551,7 @@ static void render() {
   const bool pairing = !linked || another;   // the pair window shows even with the helper linked
 
   // top bar
-  lv_obj_set_style_bg_color(dot, C(pairing ? C_WARN : C_TEXT), 0);
+  lv_obj_set_style_bg_color(dot, C(pairing ? C_WARN : C_OK), 0);
   char source[48];
   source_label(source, sizeof source, np.player, Media::shownKind(), Media::shownName());
   set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? source : "keys only");
@@ -459,7 +563,6 @@ static void render() {
   if (pairing) {
     lv_obj_remove_flag(pgPair, LV_OBJ_FLAG_HIDDEN);
     const int cur = np.link == Media::LINK_PAIRING ? 2 : 1;
-    set_text(lblPairHead, another ? "Pair another device" : "Pair an iPad or Mac");
     set_text(lblPairFoot, another ? "Open for one minute." : "Nothing to install.");
     for (int i = 0; i < 3; i++) {
       const bool on = i == cur;
@@ -472,7 +575,10 @@ static void render() {
   } else {
     lv_obj_add_flag(pgPair, LV_OBJ_FLAG_HIDDEN);
   }
-  set_text(lblAboutLink, host ? "Mac helper (USB)" : ams ? "Apple Media Service" : linked ? "media keys only" : "not connected");
+  char through[24]; snprintf(through, sizeof through, "%s helper (USB)", Media::shownKind());
+  set_text(lblAboutLink, host ? through : ams ? "Apple Media Service" : linked ? "media keys only" : "not connected");
+  set_text(lblAboutShown, linked ? Media::shownName() : "—");
+  render_devices();
 
   // what is playing
   const bool hasTrack = ams && (np.title[0] || np.artist[0]);
@@ -493,8 +599,10 @@ static void render() {
     lv_obj_set_style_text_font(lblArtist, F_BODY, 0);
     lv_label_set_long_mode(lblArtist, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_height(lblArtist, LV_SIZE_CONTENT);
-    set_text(lblArtist, nothing ? (host ? "Start Spotify or Music on the Mac, or press play to resume." : "Start something on your device, or press play to resume the last app.")
-                                : "Track info comes from iPad and iPhone only. The buttons still work.");
+    set_text(lblArtist, nothing ? (!host ? "Start something on your device, or press play to resume the last app."
+                                       : !strcmp(Media::shownKind(), "Windows") ? "Start something on the PC, or press play to resume."
+                                       : "Start Spotify or Music on the Mac, or press play to resume.")
+                                : "Track info needs an iPad or iPhone, or the helper on a computer. The buttons still work.");
   }
 
   // progress
@@ -508,7 +616,7 @@ static void render() {
     fmt_time(a, sizeof a, el, false); fmt_time(b, sizeof b, np.duration - el, true);
     set_text(lblEl, a); set_text(lblRem, b);
   } else { set_text(lblEl, ""); set_text(lblRem, ""); }
-  lv_obj_align(lblRem, LV_ALIGN_TOP_RIGHT, -12, 137);
+  lv_obj_align(lblRem, LV_ALIGN_TOP_RIGHT, -12, 135);
 
   // transport
   const bool playing = np.state == 1;
@@ -525,12 +633,13 @@ static void render() {
   set_enabled(btnPlay, linked);
 
   // volume
-  if (ams && np.volume >= 0) {
-    char v[8]; snprintf(v, sizeof v, "%d", np.volume);
-    set_text(lblVolVal, v);
-    lv_obj_set_width(volFill, 102 * np.volume / 100);
-  } else { set_text(lblVolVal, "—"); lv_obj_set_width(volFill, 0); }
-  lv_obj_align(lblVolVal, LV_ALIGN_TOP_RIGHT, -3, 10);
+  const int level = volTarget >= 0 ? volTarget : ams ? np.volume : -1;
+  const int knob = (level < 0 ? 50 : level) * (VOL_W - 22) / 100;
+  char v[8]; snprintf(v, sizeof v, "%d", level);
+  set_text(lblVolVal, level < 0 ? "—" : v);
+  lv_obj_align(lblVolVal, LV_ALIGN_TOP_RIGHT, 0, 0);
+  lv_obj_set_width(volFill, level < 0 ? 0 : knob + 11);
+  lv_obj_set_x(volKnob, knob);
 
   // more page
   for (int i = 0; i < 6; i++) {
@@ -546,10 +655,9 @@ static void render() {
     }
     set_enabled(t.btn, sup);
     lv_obj_set_style_opa(t.btn, sup ? LV_OPA_COVER : LV_OPA_40, 0);
-    lv_obj_set_style_bg_color(t.btn, C(active ? C_ACCENT : C_SURFACE), 0);
-    lv_obj_set_style_border_color(t.btn, C(active ? C_ACCENT : C_LINE), 0);
-    set_icon_color(t.ico, active ? C_ON_ACCENT : C_TEXT);
-    lv_obj_set_style_text_color(t.lbl, C(active ? C_ON_ACCENT : C_TEXT_2), 0);
+    lv_obj_set_style_border_color(t.btn, C(active ? C_OK : C_LINE), 0);
+    if (active) lv_obj_remove_flag(t.dot, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(t.dot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(t.lbl, C(active ? C_TEXT : C_TEXT_2), 0);
   }
 
 #ifndef LED_QUIET
@@ -560,8 +668,9 @@ static void render() {
 // ---------------- housekeeping ----------------
 static void ui_tick(lv_timer_t*) {
   render();
+  vol_tick();
   if (toastUntil && millis() > toastUntil) { lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN); toastUntil = 0; }
-  if (forgetArmedAt && millis() - forgetArmedAt > 4000) { forgetArmedAt = 0; set_text(lblForget, "FORGET PAIRING"); }
+  if (forgetArmedAt && millis() - forgetArmedAt > 4000) { forgetArmedAt = 0; set_text(lblForget, "Forget pairing"); }
 
   const int target = (DIM_AFTER_MS > 0 && lv_display_get_inactive_time(NULL) > DIM_AFTER_MS) ? BL_DIM : BL_FULL;
   if (blLevel != target) {

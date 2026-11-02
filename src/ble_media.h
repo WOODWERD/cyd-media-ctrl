@@ -50,9 +50,17 @@ void send(Cmd c);                    // AMS when available, else the matching HI
 bool supports(const NowPlaying& np, Cmd c);
 void pairAnother();                  // open a 60 s pair window; drops a host only with both slots full
 bool pairWindow();
-bool switchSource();                 // move to the next source reporting Now Playing; false if only one
+struct Device {                      // one reachable host, for the Devices screen (MC-S11)
+  int id;
+  char name[24], sub[48];            // "My iPhone", "iPhone · Bluetooth · Spotify"
+  int8_t state;                      // as NowPlaying.state
+  bool shown;
+};
+int devices(Device* out, int cap);   // fills out, returns the count
+void showSource(int id);             // show this host now; it stands until another starts (MC-R47)
+void setVolume(int level);           // exact level, helper hosts only (MC-R48)
 const char* shownName();             // the shown source's own name, or "Bluetooth"
-const char* shownKind();             // "iPhone", "iPad", "Mac", or "" if unknown
+const char* shownKind();             // "iPhone", "iPad", "Mac", "Windows", or "" if unknown
 void forgetPairing();                // wipe bonds, new Bluetooth address, reboot
 String address();
 

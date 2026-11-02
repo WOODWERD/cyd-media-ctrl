@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # vendored pyserial (serial/), BSD licence
 import serial  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.2.7"
 POLL_S = 1.0
 KEEPALIVE_S = 4.0
 PORT_GLOBS = ["/dev/cu.usbserial-*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB_USBtoUART*", "/dev/cu.usbmodem*"]
@@ -149,6 +149,9 @@ class Player:
             msg = {"t": "idle", "vol": vol, "muted": muted}
         return msg
 
+    def set_volume(self, level):
+        return osa(f"set volume output volume {max(0, min(100, int(level)))}")
+
     def command(self, c):
         if c == VOL_UP:
             return osa(f"set volume output volume ((output volume of (get volume settings)) + {VOL_STEP})")
@@ -193,9 +196,15 @@ def open_port(path):
     return s
 
 
+QUIET = set()  # ports that didn't answer: opening one restarts whatever is on it, so ask only once
+
+
 def find_board(explicit=None):
     ports = [explicit] if explicit else sorted({p for g in PORT_GLOBS for p in glob.glob(g)})
+    QUIET.intersection_update(ports)  # unplugged and back gets a fresh look
     for path in ports:
+        if path in QUIET and not explicit:
+            continue
         try:
             s = open_port(path)
         except (serial.SerialException, OSError) as e:
@@ -222,6 +231,7 @@ def find_board(explicit=None):
                     log(f"found Media Ctrl {m.get('fw', '?')} on {path}")
                     return s
         s.close()
+        QUIET.add(path)
     return None
 
 
@@ -236,7 +246,7 @@ class Link:
         with self.lock:
             self.port.write(data)
 
-    def reader(self, on_cmd):
+    def reader(self, on_cmd, on_vol=None):
         buf = b""
         while self.alive:
             try:
@@ -256,6 +266,8 @@ class Link:
                     continue
                 if m.get("t") == "cmd":
                     on_cmd(int(m.get("c", -1)))
+                elif m.get("t") == "vol" and on_vol:
+                    on_vol(int(m.get("v", 0)))
                 elif m.get("t") == "hello":
                     on_cmd(None)  # board rebooted: resend everything
 
@@ -279,9 +291,14 @@ def run(args):
             log(f"command {c}: {'ok' if ok else 'failed ' + out}")
             force.set()  # report the new state right away
 
-        threading.Thread(target=link.reader, args=(on_cmd,), daemon=True).start()
+        def on_vol(level):
+            ok, out = player.set_volume(level)
+            log(f"volume {level}: {'ok' if ok else 'failed ' + out}")
+            force.set()
+
+        threading.Thread(target=link.reader, args=(on_cmd, on_vol), daemon=True).start()
         try:
-            link.send({"t": "host", "name": os.uname().nodename.split(".")[0] or "Mac"})
+            link.send({"t": "host", "name": os.uname().nodename.split(".")[0] or "Mac", "os": "mac"})
             last, last_sent = None, 0.0
             while link.alive:
                 msg = player.read()

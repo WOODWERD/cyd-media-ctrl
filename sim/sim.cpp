@@ -16,12 +16,24 @@ void Media::send(Cmd) {}
 void Media::forgetPairing() {}
 void Media::pairAnother() {}
 bool Media::pairWindow() { return false; }
+int Media::devices(Device* d, int cap) {
+  const char* name[3] = {"My iPhone", "My iPad", "Mac"};
+  const char* sub[3] = {"iPhone · Bluetooth · Spotify", "iPad · Bluetooth · YouTube", "Helper · USB · Spotify"};
+  for (int i = 0; i < 3; i++) { d[i].id = i; strlcpy(d[i].name, name[i], 24); strlcpy(d[i].sub, sub[i], 48); d[i].state = i == 0; d[i].shown = i == 0; }
+  return 3;
+}
+void Media::showSource(int) {}
+void Media::setVolume(int) {}
+const char* Media::shownName() { return fx.link == LINK_HOST ? "Mac" : "My iPhone"; }
+const char* Media::shownKind() { return fx.link == LINK_HOST ? "Mac" : "iPhone"; }
 String Media::address() { return String("D7:3A:91:5C:0E:42"); }
 void HostLink::begin(const char*) {}
 void HostLink::tick() {}
 bool HostLink::active() { return false; }
 void HostLink::snapshot(Media::NowPlaying&) {}
 void HostLink::send(Media::Cmd) {}
+void HostLink::sendVolume(int) {}
+const char* HostLink::osName() { return "Mac"; }
 void HostLink::handleLine(const char*) {}
 bool Media::supports(const NowPlaying& s, Cmd c) {
   if (s.link == LINK_HOST) return c == CMD_MUTE ? (s.supported & (1u << 15)) : (c < 15 && (s.supported & (1u << c)));
@@ -62,6 +74,7 @@ int main() {
   fx.supported = 0x0FFF; fx.rev++;
   dump("3_now_playing_paused");
   fx.state = 1; fx.rate = 1; fx.elapsedAt = g_millis; fx.rev++; dump("4_now_playing");
+  devices_open(nullptr); dump("13_devices"); devices_close(nullptr);
   strcpy(fx.title, "Weightless"); strcpy(fx.artist, "Señor Coconut · Ærø Café — Ünïcødé test"); fx.rev++; dump("5_short_title");
   set_page(1); dump("6_more");
   set_page(0);

@@ -9,6 +9,7 @@ static const char* fw = "";
 static char buf[1536];
 static size_t len = 0;
 static bool overflow = false;
+static bool windows = false;
 
 static void hello() { Serial.printf("{\"t\":\"hello\",\"dev\":\"media-ctrl\",\"fw\":\"%s\"}\n", fw); }
 
@@ -67,7 +68,7 @@ void HostLink::handleLine(const char* line) {
                     (1u << Media::CMD_VOL_DOWN) | (1u << 15);
     hp.supported = mask;
   } else if (!strcmp(t, "host")) {
-    // name is informational; the UI shows "Mac" when nothing is playing
+    windows = !strcmp(doc["os"] | "", "windows");   // a missing os means Mac (MC-H2)
   } else {
     known = false;
   }
@@ -89,10 +90,16 @@ void HostLink::tick() {
   }
 }
 
+const char* HostLink::osName() { return windows ? "Windows" : "Mac"; }
+
 bool HostLink::active() { return seen && (millis() - lastSeen) < HOST_TIMEOUT_MS; }
 
 void HostLink::snapshot(Media::NowPlaying& out) { out = hp; }
 
 void HostLink::send(Media::Cmd c) {
   Serial.printf("{\"t\":\"cmd\",\"c\":%u}\n", (unsigned)c);
+}
+
+void HostLink::sendVolume(int level) {
+  Serial.printf("{\"t\":\"vol\",\"v\":%d}\n", level);
 }

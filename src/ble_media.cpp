@@ -351,20 +351,37 @@ static int pickSource() {
   return 0;
 }
 
-bool Media::switchSource() {   // MC-U12: next source that's reporting Now Playing
-  pickSource();
-  for (int step = 1; step <= SLOTS; step++) {
-    const int next = (shown + step) % (SLOTS + 1);
-    if (available(next)) { shown = next; played = true; return true; }
+int Media::devices(Device* out, int cap) {
+  const int on = pickSource();
+  int n = 0;
+  for (int i = 0; i < SLOTS && n < cap; i++) {
+    Slot& s = slots[i];
+    if (s.conn == 0xFFFF) continue;
+    Device& d = out[n++];
+    d.id = i; d.shown = i == on;
+    strlcpy(d.name, s.name[0] ? s.name : "Bluetooth", sizeof d.name);
+    portENTER_CRITICAL(&mux); d.state = s.np.state; char app[24]; strlcpy(app, s.np.player, sizeof app); portEXIT_CRITICAL(&mux);
+    snprintf(d.sub, sizeof d.sub, "%s%sBluetooth%s%s", s.kind, s.kind[0] ? " · " : "", app[0] ? " · " : "", app);
   }
-  return false;
+  if (HostLink::active() && n < cap) {
+    NowPlaying h; HostLink::snapshot(h);
+    Device& d = out[n++];
+    d.id = SRC_HOST; d.shown = on == SRC_HOST; d.state = h.state;
+    strlcpy(d.name, HostLink::osName(), sizeof d.name);
+    snprintf(d.sub, sizeof d.sub, "Helper · USB%s%s", h.player[0] ? " · " : "", h.player);
+  }
+  return n;
 }
 
+void Media::showSource(int id) { if (id >= 0 && id <= SRC_HOST) { shown = id; played = true; } }
+
+void Media::setVolume(int level) { HostLink::sendVolume(level); }
+
 const char* Media::shownName() {
-  if (shown == SRC_HOST) return "Mac";
+  if (shown == SRC_HOST) return HostLink::osName();
   return slots[shown].name[0] ? slots[shown].name : "Bluetooth";
 }
-const char* Media::shownKind() { return shown == SRC_HOST ? "Mac" : slots[shown].kind; }
+const char* Media::shownKind() { return shown == SRC_HOST ? HostLink::osName() : slots[shown].kind; }
 
 void Media::snapshot(NowPlaying& out) {
   const int src = pickSource();
