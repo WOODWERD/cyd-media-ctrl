@@ -35,8 +35,9 @@ tools/merge.sh cyd2usb v0.1.1       # one image for address 0x0 (blank NVS inclu
 ## The Bluetooth layer
 
 - **Advertising:** the HID service UUID, keyboard appearance (`0x03C1`, so macOS lists the device), and a 128-bit *service solicitation* for AMS. The name goes in the scan response.
-- **Address:** a random static address generated on first boot and kept in NVS (namespace `mediactrl`). **Forget pairing** wipes bonds and generates a new address, so hosts see a new device instead of failing on a stale bond. Four pairing refusals in a row (the host kills the link within 1.5 s with `0x213`, `0x205`, `0x206` or `0x23D`) trigger the same reset.
-- **HID:** one 16-bit Consumer Control usage per report, a press followed by a release 30 ms later. Usages: Play/Pause `0xCD`, Next `0xB5`, Previous `0xB6`, Volume `0xE9`/`0xEA`, Mute `0xE2`.
+- **Address:** a random static address generated on first boot and kept in NVS (namespace `mediactrl`). **Forget all devices** wipes bonds and generates a new address, so hosts see a new device instead of failing on a stale bond. Four pairing refusals in a row (the host kills the link within 1.5 s with `0x213`, `0x205`, `0x206` or `0x23D`) trigger the same reset, unless another device is connected or one device was forgotten since boot.
+- **Devices:** three links at once (`SLOTS`), each with its own track, AMS subscriptions and HID target; the controller allows three. Up to six bonds are kept (`CONFIG_BT_NIMBLE_MAX_BONDS=6`), with each device's name and kind saved in NVS (namespace `mcnames`) so the Devices screen can list it while it's away. Forgetting one device deletes only its bond (`NimBLEDevice::deleteBond`). The board shows the device that started playing most recently, and buttons go to that device only.
+- **HID:** one 16-bit Consumer Control usage per report, a press followed by a release 30 ms later. Usages: Play/Pause `0xCD`, Next `0xB5`, Previous `0xB6`, Volume `0xE9`/`0xEA`, Mute `0xE2`. To a Mac (model string starting `Mac`), next and previous are Fast Forward `0xB3` and Rewind `0xB4`, which macOS turns into track skips; it ignores `0xB5` and `0xB6`.
 - **AMS client:** once the link is encrypted, the board becomes a GATT client on the same connection (`NimBLEServer::getClient`). It discovers service `89D3502B-…-C502AD55F8DC`, subscribes to Remote Command and Entity Update, and registers for:
   - Player: name, playback info (`state,rate,elapsed`), volume
   - Track: artist, title, duration
@@ -45,7 +46,9 @@ tools/merge.sh cyd2usb v0.1.1       # one image for address 0x0 (blank NVS inclu
   Values flagged *truncated* are re-read in full through Entity Attribute. The Remote Command notification lists the commands the current app supports; the UI dims everything else. If the service isn't found, the board retries every 5 s, up to 12 times, and shows keys-only mode meanwhile.
 - **Threading:** notifications arrive on the NimBLE task and are copied into one `NowPlaying` struct under a spinlock. The UI takes a snapshot every 100 ms. All GATT writes happen in the main loop.
 
-## USB host link (Mac)
+## USB host link (off by default)
+
+Media over USB is switched off (`-DUSB_MEDIA=0`, the default): the board still answers `{"t":"who"}` with its hello line and logs over serial, but it ignores now-playing lines from a helper and never shows a helper as a source. Build with `-DUSB_MEDIA=1` to bring the USB helper back. The helpers are moving to Bluetooth.
 
 Serial runs at 115200 with a 2 KB receive buffer. Lines starting with `{` are JSON; everything else is the firmware's own log, which both sides ignore. The helper is considered present for 8 s after its last line, and it sends at least every 4 s. `Media::snapshot()` returns the Mac's state when the Mac is playing, or when the iPad isn't. `Media::send()` routes a button to whichever source is shown.
 

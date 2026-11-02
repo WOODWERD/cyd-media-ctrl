@@ -1,13 +1,14 @@
-# Media Ctrl: a desk media remote for the iPad on the Cheap Yellow Display
+# Media Ctrl: a Bluetooth desk media remote on the Cheap Yellow Display
 
 _An open-hardware project from [WOODWERD LLC](https://woodwerd.com), a design group in Austin, Texas._
 
-Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small media remote that stands beside your keyboard, in portrait. It pairs with an **iPad** over Bluetooth, shows what is playing, and controls it. The iPad needs no app. On a **Mac**, a small helper app does the same over the USB cable for Spotify and Apple Music. See [Media Ctrl on a Mac](docs/MAC.md).
+Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small media remote that stands beside your keyboard, in portrait. It connects over Bluetooth to up to **three devices at once**, such as an iPhone, an iPad and a Mac, shows what's playing, and controls it. No app is needed.
 
-- **Now playing:** app name, track title, artist, a live progress bar with elapsed and remaining time, and the iPad's volume.
-- **Transport:** large previous, play/pause and next buttons, plus volume − and +.
-- **More** (swipe left): skip back and forward, shuffle, repeat, like and mute.
-- **Works with any app that shows in Control Center,** such as Spotify, Apple Music, Podcasts and YouTube.
+- **Now playing:** the app and device (**Spotify iPhone**, **YouTube iPad**), track title, artist, a live progress bar and the volume.
+- **Transport:** large previous, play/pause and next buttons, and a volume slider.
+- **Devices:** hold the top right of the screen to see every connected and saved device, switch between them, pair another, or forget one. The board also follows whichever device starts playing.
+- **More:** skip back and forward, shuffle, repeat, like and mute.
+- **Works with any app that shows in Control Center** on an iPhone or iPad, such as Spotify, Apple Music, Podcasts and YouTube. On a Mac it works as media keys for now; see [Media Ctrl on a Mac](docs/MAC.md).
 
 ![Media Ctrl screens](docs/screens.png)
 
@@ -17,32 +18,32 @@ Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small m
 
 ## How it works
 
-A single Bluetooth LE link to the iPad does two jobs:
+Each Bluetooth LE link does two jobs:
 
-1. **Media keys.** The board is a Bluetooth HID device that sends only the standard media keys (Consumer Control page): play/pause, next, previous, volume and mute. Every computer and tablet understands these. The HID descriptor has no keyboard collection, so the iPad keeps its on-screen keyboard.
+1. **Media keys.** The board is a Bluetooth HID device that sends only the standard media keys (Consumer Control page): play/pause, next, previous, volume and mute. Every computer, phone and tablet understands these. The HID descriptor has no keyboard collection, so an iPhone or iPad keeps its on-screen keyboard. A Mac gets Fast Forward and Rewind for next and previous, because macOS skips tracks on those.
 2. **Apple Media Service (AMS).** iPadOS and iOS publish the system's Now Playing state to paired Bluetooth accessories through AMS, the same channel an Apple Watch uses. The board subscribes to it to read the app, title, artist, duration, elapsed time, volume, shuffle and repeat. It also sends AMS remote commands, including skip ±, like, shuffle and repeat, which have no media-key equivalent.
 
-3. **The Mac helper (USB).** macOS doesn't publish Now Playing to accessories, so on a Mac the [helper app](docs/MAC.md) reads Spotify and Music and sends that to the board as JSON lines over the USB serial port. It runs the board's button presses back as AppleScript.
+The board holds up to three links at once, each with its own track and controls. It shows one device at a time and stays on the last one that started playing until another starts, so pausing never moves it. You can also choose a device on the **Devices** screen. Buttons only ever reach the device on screen.
 
-When AMS (or the Mac helper) is present, the board uses it for everything it can do. When both the iPad and the Mac are connected, the board stays on the last one that was playing until the other starts. When neither source is present, the media keys are the fallback and the screen says so.
+macOS and Windows don't publish Now Playing to accessories, so a computer gets the media keys only, and the screen says so. Helper apps that send a computer's track info over Bluetooth are planned. The USB cable carries no media: it powers the board and is used for flashing and diagnostics.
 
-| On the screen | iPad (AMS) | Without AMS (media keys) |
+| On the screen | iPhone, iPad (AMS) | Without AMS (media keys) |
 |---|---|---|
 | Title, artist, progress, volume | ✓ | — |
 | Previous / Play-Pause / Next | ✓ | ✓ |
-| Volume − / + | ✓ (the number follows the iPad) | ✓ |
+| Volume slider | ✓ (the number follows the device) | ✓ in steps |
 | −15 s / +15 s, shuffle, repeat, like | ✓ if the app supports it (tiles dim if not) | — |
 | Mute | media key | media key |
 
-### iPad, Mac and the rest
+### iPhone, iPad, Mac and the rest
 
-| Host | What you get |
+| Device | What you get |
 |---|---|
-| iPad, iPhone | Everything above. |
-| Mac | Everything above for **Spotify** and **Apple Music** with the [Mac helper](docs/MAC.md) over USB (Like works in Music only). Without the helper: media keys only. |
+| iPhone, iPad | Everything above. |
+| Mac | Media keys: play/pause, previous, next and volume, sent to the app that played last. No track info yet. See [Media Ctrl on a Mac](docs/MAC.md). |
 | Windows, Android | Media keys only (untested). |
 
-The board connects to one host at a time and remembers several. To add a second device, long-press the title and choose **Pair another device**. That releases the current host for a minute so the new one can pair.
+Three devices stay connected together, and the board remembers six. Pair each from its Bluetooth settings. With three connected, open **Devices** and tap **Pair a device** to make room. To remove one device, hold its row on **Devices** and tap again to confirm. See [Getting started](docs/GETTING_STARTED.md).
 
 ## Quick start (no toolchain)
 
@@ -53,7 +54,7 @@ The board connects to one host at a time and remembers several. To add a second 
      esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.2.0-cyd2usb.bin
      ```
    If the port doesn't appear, hold **BOOT** while plugging the board in. 921600 baud is unreliable on the CH340.
-2. **Pair.** On the iPad, open Settings › Bluetooth, tap **Media Ctrl**, then tap **Pair**.
+2. **Pair.** On the iPhone or iPad, open Settings › Bluetooth, tap **Media Ctrl**, then tap **Pair**. On a Mac, use System Settings › Bluetooth.
 3. **Play something.** Within a couple of seconds the screen fills in.
 
 The full image starts with a clean pairing table each time it's flashed. To update without losing pairings, write `release/media-ctrl-v0.2.0-cyd2usb-app-0x10000.bin` at **0x10000** instead.
@@ -62,7 +63,7 @@ The full image starts with a clean pairing table each time it's flashed. To upda
 
 - **ESP32-2432S028R CYD, USB-C / "2-USB" variant (ST7789 panel).** This is the prebuilt image.
 - **Original micro-USB CYD (ILI9341).** Build the `cyd` environment (untested).
-- **Power:** USB from the iPad's charger, a hub or the Mac. The backlight dims after two minutes untouched and never turns off; a touch or a new track wakes it.
+- **Power:** USB from a charger, a hub or a computer. The cable carries power only, plus flashing and diagnostics. Battery power is planned. The backlight dims after two minutes untouched and never turns off; a touch or a new track wakes it.
 
 Nothing to solder.
 
@@ -82,9 +83,9 @@ The firmware runs fine on a bare board too.
 
 ## Docs
 
-- [Getting started](docs/GETTING_STARTED.md): pairing, every screen and button, About and troubleshooting.
+- [Getting started](docs/GETTING_STARTED.md): pairing, every screen and button, switching and forgetting devices, About and troubleshooting.
 - [Flash it](docs/flash/index.md): browser flasher and terminal commands.
-- [Media Ctrl on a Mac](docs/MAC.md): the helper app, install, and how it works.
+- [Media Ctrl on a Mac](docs/MAC.md) and [on Windows](docs/WINDOWS.md): pairing, what works, and the planned helper.
 - [Firmware & code](docs/firmware.md): building, build flags, how the Bluetooth layer works, the host simulator.
 - [Bench test](docs/TESTING.md): the checklist used before each release.
 - [Case & parts](https://woodwerd.github.io/cyd-case/): the WOODWERD CYD Case, BOM and build guide.
