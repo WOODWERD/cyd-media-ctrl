@@ -48,11 +48,11 @@ void tick();                         // call from loop()
 void snapshot(NowPlaying& out);      // thread-safe copy for the UI
 void send(Cmd c);                    // AMS when available, else the matching HID media key
 bool supports(const NowPlaying& np, Cmd c);
-void pairAnother();                  // let a second device (Mac / iPad) pair: drops the current one for 60 s
+void pairAnother();                  // open a 60 s pair window; drops a host only with both slots full
 bool pairWindow();
-bool switchSource();                 // swap between the Bluetooth host and the USB helper; false if only one
-const char* bleName();               // the Bluetooth host's own name, or "Bluetooth"
-const char* shownName();             // the source chosen by switchSource
+bool switchSource();                 // move to the next source reporting Now Playing; false if only one
+const char* shownName();             // the shown source's own name, or "Bluetooth"
+const char* shownKind();             // "iPhone", "iPad", "Mac", or "" if unknown
 void forgetPairing();                // wipe bonds, new Bluetooth address, reboot
 String address();
 

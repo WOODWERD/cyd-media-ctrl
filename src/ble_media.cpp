@@ -39,23 +39,33 @@ enum { Q_INDEX = 0, Q_COUNT = 1, Q_SHUFFLE = 2, Q_REPEAT = 3 };
 enum { TR_ARTIST = 0, TR_ALBUM = 1, TR_TITLE = 2, TR_DURATION = 3 };
 
 // ---------------------------------------------------------------- state
+static const int SLOTS = 2;                  // Bluetooth hosts held at once (MC-R39)
+static const int SRC_HOST = SLOTS;           // the USB helper, as a source after the slots
+
+struct Slot {
+  volatile uint16_t conn = 0xFFFF;
+  Media::NowPlaying np;                      // guarded by mux
+  NimBLERemoteCharacteristic *chRemote = nullptr, *chUpdate = nullptr, *chAttr = nullptr;
+  volatile uint32_t amsAt = 0;               // when to (re)try AMS discovery, 0 = not scheduled
+  uint8_t amsTries = 0;
+  volatile bool needFullTitle = false, needFullArtist = false;
+  uint32_t connectedAt = 0;
+  char name[24] = "";                        // the host's own name, read after AMS is up
+  char kind[8] = "";                         // "iPhone" or "iPad", from its model string
+};
+
 static NimBLEServer* srv = nullptr;
 static NimBLEHIDDevice* hid = nullptr;
 static NimBLECharacteristic* input = nullptr;
-static NimBLERemoteCharacteristic *chRemote = nullptr, *chUpdate = nullptr, *chAttr = nullptr;
 
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-static Media::NowPlaying np;                 // guarded by mux
-static volatile uint16_t connHandle = 0xFFFF;
-static volatile uint32_t amsAt = 0;          // when to (re)try AMS discovery, 0 = not scheduled
-static uint8_t amsTries = 0;
-static volatile bool needFullTitle = false, needFullArtist = false;
-static uint32_t connectedAt = 0;
+static Slot slots[SLOTS];
+static int shown = SRC_HOST;                 // the source on screen
+static bool played = false;                  // something has played since boot, or a source was chosen
 static uint8_t quickDrops = 0;               // host killed the link before encryption, in a row
 static Preferences prefs;
 static uint8_t ownAddr[6];
-static char peerName[24] = "";               // the Bluetooth host's own name, read after AMS is up
-// "Pair another device": drop the current host and refuse it for a minute so another can pair
+// "Pair another device" with both slots full: drop one host and refuse it for a minute
 static volatile uint32_t pairWindowUntil = 0;
 static NimBLEAddress kickedPeer;
 static bool inPairWindow() { return pairWindowUntil && (int32_t)(millis() - pairWindowUntil) < 0; }
@@ -63,10 +73,16 @@ static bool isKicked(const NimBLEConnInfo& info) {
   return inPairWindow() && !kickedPeer.isNull() && info.getIdAddress() == kickedPeer;
 }
 
-static void bump() { np.rev++; }
-static void setLink(Media::Link l) { portENTER_CRITICAL(&mux); np.link = l; bump(); portEXIT_CRITICAL(&mux); }
+static Slot* byConn(uint16_t conn) {
+  for (Slot& s : slots) if (s.conn == conn) return &s;
+  return nullptr;
+}
+static Slot* freeSlot() { return byConn(0xFFFF); }
 
-static void clearTrack() {
+static void bump(Slot& s) { s.np.rev++; }
+static void setLink(Slot& s, Media::Link l) { portENTER_CRITICAL(&mux); s.np.link = l; bump(s); portEXIT_CRITICAL(&mux); }
+
+static void clearTrack(Media::NowPlaying& np) {
   np.player[0] = np.title[0] = np.artist[0] = 0;
   np.duration = np.elapsed = np.rate = 0; np.elapsedAt = millis();
   np.state = -1; np.volume = -1; np.shuffle = -1; np.repeat = -1; np.supported = 0;
@@ -85,8 +101,9 @@ static void copyStr(char* dst, size_t cap, const uint8_t* src, size_t n) {
 }
 
 // ---------------------------------------------------------------- AMS notifications (NimBLE task)
-static void onEntityUpdate(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) {
+static void entityUpdate(Slot& s, uint8_t* d, size_t len) {
   if (len < 3) return;
+  Media::NowPlaying& np = s.np;
   const uint8_t ent = d[0], attr = d[1], flags = d[2];
   const uint8_t* v = d + 3; const size_t n = len - 3;
   char tmp[64];
@@ -111,103 +128,124 @@ static void onEntityUpdate(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, 
   } else if (ent == ENT_QUEUE && attr == Q_REPEAT) {
     copyStr(tmp, sizeof tmp, v, n); np.repeat = n ? atoi(tmp) : -1;
   } else if (ent == ENT_TRACK && attr == TR_TITLE) {
-    copyStr(np.title, sizeof np.title, v, n); if (flags & 1) needFullTitle = true;
+    copyStr(np.title, sizeof np.title, v, n); if (flags & 1) s.needFullTitle = true;
   } else if (ent == ENT_TRACK && attr == TR_ARTIST) {
-    copyStr(np.artist, sizeof np.artist, v, n); if (flags & 1) needFullArtist = true;
+    copyStr(np.artist, sizeof np.artist, v, n); if (flags & 1) s.needFullArtist = true;
   } else if (ent == ENT_TRACK && attr == TR_DURATION) {
     copyStr(tmp, sizeof tmp, v, n); np.duration = n ? atof(tmp) : 0;
   }
-  bump();
+  bump(s);
   portEXIT_CRITICAL(&mux);
 }
 
-static void onRemoteCommands(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) {
+static void remoteCommands(Slot& s, uint8_t* d, size_t len) {
   uint16_t mask = 0;
   for (size_t i = 0; i < len; i++) if (d[i] < 16) mask |= 1u << d[i];
-  portENTER_CRITICAL(&mux); np.supported = mask; bump(); portEXIT_CRITICAL(&mux);
+  portENTER_CRITICAL(&mux); s.np.supported = mask; bump(s); portEXIT_CRITICAL(&mux);
   Serial.printf("[ams] supported commands 0x%04X\n", mask);
 }
+
+// NimBLE's callbacks carry no user data, so each slot gets its own pair
+template <int I> static void onEntityUpdate(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) { entityUpdate(slots[I], d, len); }
+template <int I> static void onRemoteCommands(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) { remoteCommands(slots[I], d, len); }
 
 // ---------------------------------------------------------------- server callbacks
 class ServerCB : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo& info) override {
-    connHandle = info.getConnHandle();
-    connectedAt = millis();
-    chRemote = chUpdate = chAttr = nullptr;
-    amsAt = 0; amsTries = 0;
-    portENTER_CRITICAL(&mux); clearTrack(); np.link = Media::LINK_PAIRING; bump(); portEXIT_CRITICAL(&mux);
+    Slot* s = freeSlot();
+    if (!s) { srv->disconnect(info); return; }
+    s->conn = info.getConnHandle();
+    s->connectedAt = millis();
+    s->chRemote = s->chUpdate = s->chAttr = nullptr;
+    s->amsAt = 0; s->amsTries = 0; s->name[0] = s->kind[0] = 0;
+    portENTER_CRITICAL(&mux); clearTrack(s->np); s->np.link = Media::LINK_PAIRING; bump(*s); portEXIT_CRITICAL(&mux);
     Serial.printf("[ble] connected %s (id %s)\n", info.getAddress().toString().c_str(), info.getIdAddress().toString().c_str());
     if (isKicked(info)) { Serial.println("[ble] previous host - refused during pair window"); srv->disconnect(info); return; }
+    if (freeSlot()) NimBLEDevice::getAdvertising()->start();   // leave room for the next host (MC-R41)
     // iOS pairs on its own when it reads the HID map; this just nudges a bonded peer to re-encrypt fast
     NimBLEDevice::startSecurity(info.getConnHandle());
   }
-  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
-    const uint32_t up = millis() - connectedAt;
-    const bool quick = up < 1500 && np.link == Media::LINK_PAIRING &&
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int reason) override {
+    Slot* s = byConn(info.getConnHandle());
+    if (!s) return;
+    const uint32_t up = millis() - s->connectedAt;
+    const bool quick = up < 1500 && s->np.link == Media::LINK_PAIRING &&
                        (reason == 0x213 || reason == 0x205 || reason == 0x206 || reason == 0x23D);
     quickDrops = quick ? quickDrops + 1 : 0;
-    connHandle = 0xFFFF; amsAt = 0;
-    chRemote = chUpdate = chAttr = nullptr;
-    peerName[0] = 0;
-    portENTER_CRITICAL(&mux); clearTrack(); np.link = Media::LINK_ADVERTISING; bump(); portEXIT_CRITICAL(&mux);
+    s->conn = 0xFFFF; s->amsAt = 0;
+    s->chRemote = s->chUpdate = s->chAttr = nullptr;
+    s->name[0] = s->kind[0] = 0;
+    portENTER_CRITICAL(&mux); clearTrack(s->np); s->np.link = Media::LINK_ADVERTISING; bump(*s); portEXIT_CRITICAL(&mux);
     Serial.printf("[ble] disconnected 0x%03X after %lu ms%s\n", reason, (unsigned long)up, quick ? " (pairing refused)" : "");
   }
   void onAuthenticationComplete(NimBLEConnInfo& info) override {
     Serial.printf("[ble] auth complete bonded=%d encrypted=%d\n", info.isBonded(), info.isEncrypted());
     if (!info.isEncrypted()) return;
     if (isKicked(info)) { Serial.println("[ble] previous host - refused during pair window"); srv->disconnect(info); return; }
-    if (inPairWindow()) pairWindowUntil = 0;   // a different device paired: window done
+    Slot* s = byConn(info.getConnHandle());
+    if (!s) return;
+    if (inPairWindow()) pairWindowUntil = 0;   // a device paired: window done
     quickDrops = 0;
-    setLink(Media::LINK_READY);
-    amsAt = millis() + 1200;   // let iOS finish its own HID discovery first
+    setLink(*s, Media::LINK_READY);
+    s->amsAt = millis() + 1200;   // let iOS finish its own HID discovery first
   }
   void onMTUChange(uint16_t mtu, NimBLEConnInfo&) override { Serial.printf("[ble] MTU %u\n", mtu); }
 };
 
 // ---------------------------------------------------------------- AMS setup (main loop)
-static bool registerAttrs(uint8_t ent, std::initializer_list<uint8_t> attrs) {
+static bool registerAttrs(Slot& s, uint8_t ent, std::initializer_list<uint8_t> attrs) {
   std::vector<uint8_t> v{ent};
   v.insert(v.end(), attrs.begin(), attrs.end());
-  return chUpdate->writeValue(v.data(), v.size(), true);
+  return s.chUpdate->writeValue(v.data(), v.size(), true);
 }
 
-static void amsSetup() {
-  amsAt = 0;
-  if (connHandle == 0xFFFF) return;
-  NimBLEClient* cl = srv->getClient(connHandle);
+static void readIdentity(Slot& s, NimBLEClient* cl) {
+  NimBLEAttValue n = cl->getValue(NimBLEUUID((uint16_t)0x1800), NimBLEUUID((uint16_t)0x2A00));   // GAP device name
+  copyStr(s.name, sizeof s.name, n.data(), n.size());
+  char model[24] = "";
+  NimBLEAttValue m = cl->getValue(NimBLEUUID((uint16_t)0x180A), NimBLEUUID((uint16_t)0x2A24));   // model, "iPad14,8"
+  copyStr(model, sizeof model, m.data(), m.size());
+  const char* kind = !strncmp(model, "iPhone", 6) || strstr(s.name, "iPhone") ? "iPhone"
+                   : !strncmp(model, "iPad", 4) || strstr(s.name, "iPad") ? "iPad" : "";
+  strlcpy(s.kind, kind, sizeof s.kind);
+  Serial.printf("[ble] host name \"%s\" model \"%s\"\n", s.name, model);
+}
+
+static void amsSetup(int i) {
+  Slot& s = slots[i];
+  s.amsAt = 0;
+  if (s.conn == 0xFFFF) return;
+  NimBLEClient* cl = srv->getClient(s.conn);
   NimBLERemoteService* svc = cl ? cl->getService(AMS_SVC) : nullptr;
   if (!svc) {
     // AMS is not always published (e.g. right after boot of the iPad); keep trying for a while
-    amsTries++;
-    Serial.printf("[ams] service not found (try %u)\n", amsTries);
-    setLink(Media::LINK_BLIND);
-    if (amsTries < 12) amsAt = millis() + 5000;
+    s.amsTries++;
+    Serial.printf("[ams] service not found (try %u)\n", s.amsTries);
+    setLink(s, Media::LINK_BLIND);
+    if (s.amsTries < 12) s.amsAt = millis() + 5000;
     return;
   }
-  chRemote = svc->getCharacteristic(AMS_REMOTE);
-  chUpdate = svc->getCharacteristic(AMS_UPDATE);
-  chAttr   = svc->getCharacteristic(AMS_ATTR);
-  if (!chRemote || !chUpdate) { Serial.println("[ams] characteristics missing"); setLink(Media::LINK_BLIND); return; }
-  bool ok = chRemote->subscribe(true, onRemoteCommands) && chUpdate->subscribe(true, onEntityUpdate);
-  ok = ok && registerAttrs(ENT_PLAYER, {PL_NAME, PL_INFO, PL_VOLUME});
-  ok = ok && registerAttrs(ENT_TRACK, {TR_ARTIST, TR_TITLE, TR_DURATION});
-  ok = ok && registerAttrs(ENT_QUEUE, {Q_SHUFFLE, Q_REPEAT});
+  s.chRemote = svc->getCharacteristic(AMS_REMOTE);
+  s.chUpdate = svc->getCharacteristic(AMS_UPDATE);
+  s.chAttr   = svc->getCharacteristic(AMS_ATTR);
+  if (!s.chRemote || !s.chUpdate) { Serial.println("[ams] characteristics missing"); setLink(s, Media::LINK_BLIND); return; }
+  bool ok = s.chRemote->subscribe(true, i == 0 ? onRemoteCommands<0> : onRemoteCommands<1>) &&
+            s.chUpdate->subscribe(true, i == 0 ? onEntityUpdate<0> : onEntityUpdate<1>);
+  ok = ok && registerAttrs(s, ENT_PLAYER, {PL_NAME, PL_INFO, PL_VOLUME});
+  ok = ok && registerAttrs(s, ENT_TRACK, {TR_ARTIST, TR_TITLE, TR_DURATION});
+  ok = ok && registerAttrs(s, ENT_QUEUE, {Q_SHUFFLE, Q_REPEAT});
   Serial.printf("[ams] %s (MTU %u)\n", ok ? "subscribed" : "setup failed", cl->getMTU());
-  if (ok) {
-    NimBLEAttValue n = cl->getValue(NimBLEUUID((uint16_t)0x1800), NimBLEUUID((uint16_t)0x2A00));   // GAP device name
-    copyStr(peerName, sizeof peerName, n.data(), n.size());
-    Serial.printf("[ble] host name \"%s\"\n", peerName);
-  }
-  if (ok) setLink(Media::LINK_AMS);
-  else { setLink(Media::LINK_BLIND); if (++amsTries < 12) amsAt = millis() + 5000; }
+  if (ok) readIdentity(s, cl);
+  if (ok) setLink(s, Media::LINK_AMS);
+  else { setLink(s, Media::LINK_BLIND); if (++s.amsTries < 12) s.amsAt = millis() + 5000; }
 }
 
-static void readFull(uint8_t attr, char* dst, size_t cap) {
-  if (!chAttr) return;
+static void readFull(Slot& s, uint8_t attr, char* dst, size_t cap) {
+  if (!s.chAttr) return;
   uint8_t req[2] = {ENT_TRACK, attr};
-  if (!chAttr->writeValue(req, 2, true)) return;
-  NimBLEAttValue v = chAttr->readValue();
-  portENTER_CRITICAL(&mux); copyStr(dst, cap, v.data(), v.size()); bump(); portEXIT_CRITICAL(&mux);
+  if (!s.chAttr->writeValue(req, 2, true)) return;
+  NimBLEAttValue v = s.chAttr->readValue();
+  portENTER_CRITICAL(&mux); copyStr(dst, cap, v.data(), v.size()); bump(s); portEXIT_CRITICAL(&mux);
 }
 
 // ---------------------------------------------------------------- address / bonds
@@ -261,55 +299,77 @@ void Media::begin(const char* name) {
 
 void Media::tick() {
   HostLink::tick();
-  if (quickDrops >= 4) {   // the iPad keeps an old bond we no longer have: become a new device
-    Serial.println("[ble] pairing refused 4 times - new address");
-    forgetPairing();
+  if (quickDrops >= 4) {   // a host keeps an old bond we no longer have: become a new device
+    quickDrops = 0;
+    bool working = false;                   // but never at the cost of a host that's fine (MC-R46)
+    for (Slot& s : slots) if (s.conn != 0xFFFF) working = true;
+    if (!working) {
+      Serial.println("[ble] pairing refused 4 times - new address");
+      forgetPairing();
+    }
   }
-  if (amsAt && (int32_t)(millis() - amsAt) >= 0) amsSetup();
-  if (needFullTitle)  { needFullTitle = false;  readFull(TR_TITLE, np.title, sizeof np.title); }
-  if (needFullArtist) { needFullArtist = false; readFull(TR_ARTIST, np.artist, sizeof np.artist); }
+  for (int i = 0; i < SLOTS; i++) {
+    Slot& s = slots[i];
+    if (s.amsAt && (int32_t)(millis() - s.amsAt) >= 0) amsSetup(i);
+    if (s.needFullTitle)  { s.needFullTitle = false;  readFull(s, TR_TITLE, s.np.title, sizeof s.np.title); }
+    if (s.needFullArtist) { s.needFullArtist = false; readFull(s, TR_ARTIST, s.np.artist, sizeof s.np.artist); }
+  }
 }
 
-// Two sources can be live at once: the iPad over Bluetooth (AMS) and the Mac helper over USB.
-// The board stays on the last one that was playing until the other starts; pausing never moves it.
-// Until either has played, the Mac helper is shown (the board is on its cable). MC-R14a.
-static bool hostShown = true, played = false;
+// Up to three sources can be live at once: two Bluetooth hosts and the helper over USB.
+// The board stays on the last one that was playing until a different one starts; pausing never
+// moves it. Until any has played, the helper is shown (the board is on its cable). MC-R14a, MC-R42.
+static bool available(int src) {
+  if (src == SRC_HOST) return HostLink::active();
+  portENTER_CRITICAL(&mux); const bool ams = slots[src].np.link == Media::LINK_AMS; portEXIT_CRITICAL(&mux);
+  return ams;
+}
 
-static bool useHost() {
-  static bool hostWas = false, bleWas = false;
+static int pickSource() {
+  static bool was[SLOTS + 1];
+  bool playing[SLOTS + 1];
   portENTER_CRITICAL(&mux);
-  const bool ams = np.link == Media::LINK_AMS;
-  const bool blePlaying = ams && np.state == 1;
+  for (int i = 0; i < SLOTS; i++) playing[i] = slots[i].np.link == Media::LINK_AMS && slots[i].np.state == 1;
   portEXIT_CRITICAL(&mux);
-  if (blePlaying) played = true;
-  if (!HostLink::active()) {
-    if (played) hostShown = false;
-    hostWas = false; bleWas = blePlaying;
-    return false;
+  const bool hostOn = HostLink::active();
+  playing[SRC_HOST] = false;
+  if (hostOn) { Media::NowPlaying h; HostLink::snapshot(h); playing[SRC_HOST] = h.state == 1; }
+
+  for (int i = 0; i <= SLOTS; i++) {
+    if (playing[i]) played = true;
+    if (playing[i] && !was[i]) shown = i;
+    was[i] = playing[i];
   }
-  Media::NowPlaying h; HostLink::snapshot(h);
-  const bool hostPlaying = h.state == 1;
-  if (hostPlaying) played = true;
-  if (hostPlaying && !hostWas) hostShown = true;
-  else if (blePlaying && !bleWas) hostShown = false;
-  hostWas = hostPlaying; bleWas = blePlaying;
-  if (!ams) hostShown = true;            // the iPad went away: show what's still here
-  return hostShown;
+  if (!played && hostOn) shown = SRC_HOST;
+  if (available(shown)) return shown;
+
+  // the shown source went away: something playing, then the helper, then any Bluetooth host
+  for (int i = 0; i <= SLOTS; i++) if (playing[i]) return shown = i;
+  if (hostOn) return shown = SRC_HOST;
+  for (int i = 0; i < SLOTS; i++) if (available(i)) return shown = i;
+  for (int i = 0; i < SLOTS; i++) if (slots[i].conn != 0xFFFF) return shown = i;
+  return 0;
 }
 
-bool Media::switchSource() {   // MC-U12: only with both sources present
-  portENTER_CRITICAL(&mux); const bool ams = np.link == Media::LINK_AMS; portEXIT_CRITICAL(&mux);
-  if (!ams || !HostLink::active()) return false;
-  hostShown = !hostShown; played = true;
-  return true;
+bool Media::switchSource() {   // MC-U12: next source that's reporting Now Playing
+  pickSource();
+  for (int step = 1; step <= SLOTS; step++) {
+    const int next = (shown + step) % (SLOTS + 1);
+    if (available(next)) { shown = next; played = true; return true; }
+  }
+  return false;
 }
 
-const char* Media::bleName() { return peerName[0] ? peerName : "Bluetooth"; }
-const char* Media::shownName() { return hostShown ? "Mac" : bleName(); }
+const char* Media::shownName() {
+  if (shown == SRC_HOST) return "Mac";
+  return slots[shown].name[0] ? slots[shown].name : "Bluetooth";
+}
+const char* Media::shownKind() { return shown == SRC_HOST ? "Mac" : slots[shown].kind; }
 
 void Media::snapshot(NowPlaying& out) {
-  if (useHost()) { HostLink::snapshot(out); return; }
-  portENTER_CRITICAL(&mux); out = np; portEXIT_CRITICAL(&mux);
+  const int src = pickSource();
+  if (src == SRC_HOST) { HostLink::snapshot(out); return; }
+  portENTER_CRITICAL(&mux); out = slots[src].np; portEXIT_CRITICAL(&mux);
 }
 
 bool Media::supports(const NowPlaying& s, Cmd c) {
@@ -322,21 +382,22 @@ bool Media::supports(const NowPlaying& s, Cmd c) {
   return false;
 }
 
-static void hidTap(uint16_t usage) {
-  if (!input || connHandle == 0xFFFF) return;
+static void hidTap(uint16_t conn, uint16_t usage) {
+  if (!input || conn == 0xFFFF) return;
   uint8_t r[2] = {(uint8_t)usage, (uint8_t)(usage >> 8)};
-  input->setValue(r, 2); input->notify();
+  input->setValue(r, 2); input->notify(conn);   // the shown host only (MC-R43)
   delay(30);
   r[0] = r[1] = 0;
-  input->setValue(r, 2); input->notify();
+  input->setValue(r, 2); input->notify(conn);
 }
 
 void Media::send(Cmd c) {
   NowPlaying s; snapshot(s);
   if (s.link == LINK_HOST) { HostLink::send(c); Serial.printf("[usb] command %u\n", c); return; }
-  if (c != CMD_MUTE && s.link == LINK_AMS && chRemote && (s.supported & (1u << c))) {
+  Slot& slot = slots[shown == SRC_HOST ? 0 : shown];
+  if (c != CMD_MUTE && s.link == LINK_AMS && slot.chRemote && (s.supported & (1u << c))) {
     uint8_t id = c;
-    if (chRemote->writeValue(&id, 1, true)) { Serial.printf("[ams] command %u\n", c); return; }
+    if (slot.chRemote->writeValue(&id, 1, true)) { Serial.printf("[ams] command %u\n", c); return; }
   }
   uint16_t u = 0;
   switch (c) {
@@ -346,19 +407,17 @@ void Media::send(Cmd c) {
     case CMD_VOL_DOWN: u = U_VOL_DOWN; break;    case CMD_MUTE: u = U_MUTE; break;
     default: break;   // skip ±, like, shuffle, repeat have no reliable HID key
   }
-  if (u) { hidTap(u); Serial.printf("[hid] usage 0x%02X\n", u); }
+  if (u) { hidTap(slot.conn, u); Serial.printf("[hid] usage 0x%02X\n", u); }
 }
 
-void Media::pairAnother() {
+void Media::pairAnother() {   // with a slot free nothing is dropped (MC-R45)
   kickedPeer = NimBLEAddress();
-  if (connHandle != 0xFFFF) {
-    NimBLEConnInfo info = srv->getPeerInfoByHandle(connHandle);
-    kickedPeer = info.getIdAddress();
-    pairWindowUntil = millis() + 60000;
-    srv->disconnect(connHandle);
-  } else {
-    pairWindowUntil = millis() + 60000;
-  }
+  pairWindowUntil = millis() + 60000;
+  if (freeSlot()) { Serial.println("[ble] pair window open 60 s"); return; }
+  const uint16_t drop = slots[shown == 0 ? 1 : 0].conn;
+  NimBLEConnInfo info = srv->getPeerInfoByHandle(drop);
+  kickedPeer = info.getIdAddress();
+  srv->disconnect(drop);
   Serial.printf("[ble] pair window open 60 s, refusing %s\n", kickedPeer.toString().c_str());
 }
 

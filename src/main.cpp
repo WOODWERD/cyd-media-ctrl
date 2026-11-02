@@ -18,7 +18,7 @@
 #include "ble_media.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.2.5"
+#define FW_VERSION "0.2.6"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -418,6 +418,16 @@ static void ui_build() {
 }
 
 // ---------------- state → screen ----------------
+// "Spotify iPhone" (MC-U13). The app gives way so the device still fits beside the title.
+static void source_label(char* out, size_t cap, const char* app, const char* kind, const char* name) {
+  if (!app[0]) { strlcpy(out, kind[0] ? kind : name, cap); return; }
+  if (!kind[0]) { strlcpy(out, app, cap); return; }
+  const int room = 20 - (int)strlen(kind);
+  int n = min((int)strlen(app), room);
+  while (n > 0 && ((uint8_t)app[n] & 0xC0) == 0x80) n--;   // never cut a UTF-8 sequence in half
+  snprintf(out, cap, "%.*s %s", n, app, kind);
+}
+
 static void layout_track_text(const char* title) {
   // title takes one or two lines; the artist line follows it
   lv_point_t sz;
@@ -438,7 +448,9 @@ static void render() {
 
   // top bar
   lv_obj_set_style_bg_color(dot, C(pairing ? C_WARN : C_TEXT), 0);
-  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? (np.player[0] ? np.player : host ? "Mac" : Media::bleName()) : "keys only");
+  char source[48];
+  source_label(source, sizeof source, np.player, Media::shownKind(), Media::shownName());
+  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? source : "keys only");
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
   set_text(lblTitle, another ? "Pairing" : pairing ? "Not connected" : "Media Ctrl");
@@ -448,7 +460,7 @@ static void render() {
     lv_obj_remove_flag(pgPair, LV_OBJ_FLAG_HIDDEN);
     const int cur = np.link == Media::LINK_PAIRING ? 2 : 1;
     set_text(lblPairHead, another ? "Pair another device" : "Pair an iPad or Mac");
-    set_text(lblPairFoot, another ? "The last device stays paused for a minute." : "Nothing to install.");
+    set_text(lblPairFoot, another ? "Open for one minute." : "Nothing to install.");
     for (int i = 0; i < 3; i++) {
       const bool on = i == cur;
       lv_obj_set_style_bg_color(stepNum[i], C(on ? C_WARN : C_SURFACE), 0);
