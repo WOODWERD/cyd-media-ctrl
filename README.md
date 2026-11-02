@@ -14,6 +14,8 @@ Media Ctrl turns the ESP32-2432S028R "Cheap Yellow Display" (CYD) into a small m
 
 **New here?** Start with [Getting started](docs/GETTING_STARTED.md), then [Flash it](docs/flash/index.md).
 
+**Status: public beta, x0.3.0.** It's in daily use with an iPhone, an iPad and a Mac. Windows and Android are untested, and computers get media keys only until the Bluetooth helper arrives. Problems and ideas are welcome as [issues](https://github.com/WOODWERD/cyd-media-ctrl/issues).
+
 > Unofficial. Not affiliated with or endorsed by Apple or Spotify. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## How it works
@@ -47,17 +49,17 @@ Three devices stay connected together, and the board remembers six. Pair each fr
 
 ## Quick start (no toolchain)
 
-1. **Flash** `release/media-ctrl-v0.2.0-cyd2usb.bin` at address **0x0**, either:
+1. **Flash** `release/media-ctrl-x0.3.0-cyd2usb.bin` at address **0x0**, either:
    - from the [Flash it](docs/flash/index.md) page in Chrome or Edge, or
    - in a terminal, after `pip install esptool`:
      ```
-     esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-v0.2.0-cyd2usb.bin
+     esptool.py --chip esp32 --port /dev/cu.usbserial-XXXX --baud 460800 write_flash 0x0 media-ctrl-x0.3.0-cyd2usb.bin
      ```
    If the port doesn't appear, hold **BOOT** while plugging the board in. 921600 baud is unreliable on the CH340.
 2. **Pair.** On the iPhone or iPad, open Settings › Bluetooth, tap **Media Ctrl**, then tap **Pair**. On a Mac, use System Settings › Bluetooth.
 3. **Play something.** Within a couple of seconds the screen fills in.
 
-The full image starts with a clean pairing table each time it's flashed. To update without losing pairings, write `release/media-ctrl-v0.2.0-cyd2usb-app-0x10000.bin` at **0x10000** instead.
+The full image starts with a clean pairing table each time it's flashed. To update without losing pairings, write `release/media-ctrl-x0.3.0-cyd2usb-app-0x10000.bin` at **0x10000** instead.
 
 ## Hardware
 

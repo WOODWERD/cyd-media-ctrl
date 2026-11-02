@@ -19,7 +19,7 @@
 #include "ble_media.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.2.9"
+#define FW_VERSION "x0.3.0"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -469,7 +469,7 @@ static void build_pair(lv_obj_t* scr) {
 static void build_about(lv_obj_t* scr) {
   pgAbout = box(scr, 0, 0, SCREEN_W, SCREEN_H, C_BG, 0);
   lv_obj_t* h = label(pgAbout, "Media Ctrl", F_HEAD, C_TEXT); lv_obj_set_pos(h, 12, 14);
-  lv_obj_t* v = label(pgAbout, "v" FW_VERSION " · WOODWERD", F_MONO, C_TEXT_2); lv_obj_set_pos(v, 12, 38);
+  lv_obj_t* v = label(pgAbout, FW_VERSION " · WOODWERD", F_MONO, C_TEXT_2); lv_obj_set_pos(v, 12, 38);
   auto row = [&](int y, const char* k) {
     lv_obj_t* kl = label(pgAbout, k, F_MONO, C_TEXT_2); lv_obj_set_pos(kl, 12, y);
     lv_obj_t* vl = label(pgAbout, "", F_MONO, C_TEXT); lv_obj_set_pos(vl, 92, y);
@@ -786,7 +786,7 @@ static void ui_tick(lv_timer_t*) {
 void setup() {
   Serial.setRxBufferSize(2048);   // now-playing lines from the Mac helper can run to ~1 KB
   Serial.begin(115200);
-  Serial.println("Media Ctrl v" FW_VERSION);
+  Serial.println("Media Ctrl " FW_VERSION);
   pinMode(LED_R, OUTPUT); pinMode(LED_G, OUTPUT); pinMode(LED_B, OUTPUT); led(false, false, false);
 
   uiPrefs.begin("mediaui", false);

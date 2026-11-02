@@ -9,7 +9,7 @@ Media Ctrl itself is © 2026 WOODWERD LLC and MIT-licensed (see `LICENSE`). It b
 | [LVGL](https://github.com/lvgl/lvgl) 9.5 | MIT | UI toolkit. `include/lv_conf.h` is derived from LVGL's template. |
 | [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) | FreeBSD (BSD-2), plus BSD portions from Adafruit_GFX | Display driver |
 | [XPT2046_Touchscreen](https://github.com/PaulStoffregen/XPT2046_Touchscreen) | MIT | Touch controller |
-| [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) 2.x | Apache-2.0 (Apache NimBLE) | Bluetooth LE: HID device and GATT client |
+| [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) 2.x | Apache-2.0 (Apache NimBLE) | Bluetooth LE: HID device and GATT client. Pinned at 2.5.2 and patched at build time by `tools/patch_nimble_two_client.py` so each connection gets its own GATT client (two or three hosts at once). |
 | [ArduinoJson](https://github.com/bblanchon/ArduinoJson) 7 | MIT | Parses the Mac helper's messages |
 | [arduino-esp32](https://github.com/espressif/arduino-esp32) core | LGPL-2.1 | Arduino core for ESP32. Full source of this project is provided, which satisfies the relinking requirements. |
 | [ESP-IDF](https://github.com/espressif/esp-idf) components (bundled by the platform) | Apache-2.0 | |

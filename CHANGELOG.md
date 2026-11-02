@@ -1,5 +1,18 @@
 # Changelog
 
+## x0.3.0 (beta), 2026-11-02
+The first public beta. Everything is over Bluetooth now. The USB cable powers the board and is used for flashing and diagnostics.
+
+- **Three devices at once.** An iPhone, an iPad and a Mac (or any three) stay connected together, and the board remembers six. Each keeps its own track and controls.
+- **Devices screen.** Hold the top right of the screen to see every connected and saved device, tap one to switch, pair another, or forget one. The board also follows whichever device starts playing, and pausing never moves it. See [Getting started](docs/GETTING_STARTED.md).
+- **Forget one device.** Hold its row, then tap again. Every other device stays paired. About's button is now **Forget all devices**.
+- **Top right names the device:** "Spotify iPhone", "YouTube iPad". Switching shows "Switched to …".
+- **Mac over Bluetooth.** Play/pause, previous, next and volume, sent to whichever app played last. No track info yet; a Bluetooth helper is planned. See [Media Ctrl on a Mac](docs/MAC.md).
+- **New look** from WOODWERD Digital: amber play button, volume slider in place of − and +, and a **More** button.
+- Fixes: long-press on the title opens About again; the pairing screen shows during Pair a device; pairing a second device no longer drops the first.
+- Media over USB (the v0.2.0 Mac helper) is off by default (`-DUSB_MEDIA=1` brings it back). The helpers are moving to Bluetooth. A Windows helper is in `windows-helper/` but isn't used yet.
+- Prebuilt images: `release/media-ctrl-x0.3.0-cyd2usb.bin` (0x0, clean pairings) and `release/media-ctrl-x0.3.0-cyd2usb-app-0x10000.bin` (0x10000, keeps pairings).
+
 ## Docs — 2026-11-01
 - The docs site moves to WOODWERD Digital through the shared theme: the WOODWERD Toolkit strip with an All tools menu,
   a product header with no brand mark, the mark in the footer only, ink primary buttons, and Inter and JetBrains Mono
