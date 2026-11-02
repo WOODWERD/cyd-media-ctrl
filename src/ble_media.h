@@ -50,6 +50,9 @@ void send(Cmd c);                    // AMS when available, else the matching HI
 bool supports(const NowPlaying& np, Cmd c);
 void pairAnother();                  // let a second device (Mac / iPad) pair: drops the current one for 60 s
 bool pairWindow();
+bool switchSource();                 // swap between the Bluetooth host and the USB helper; false if only one
+const char* bleName();               // the Bluetooth host's own name, or "Bluetooth"
+const char* shownName();             // the source chosen by switchSource
 void forgetPairing();                // wipe bonds, new Bluetooth address, reboot
 String address();
 

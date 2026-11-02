@@ -17,3 +17,10 @@ site/
 __pycache__/
 sim/test_host_link
 docs-theme/
+
+# Working files, kept private
+CLAUDE.md
+spec.md
+HANDOFF.md
+reference/
+.claude/

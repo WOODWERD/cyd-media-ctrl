@@ -28,5 +28,5 @@ Run this checklist on real hardware before every release. Note the firmware vers
 | 22 | Mac: every button (transport, ±15 s, shuffle, repeat, volume, mute). | Spotify / system responds; screen updates within ~1 s. |
 | 23 | Mac: switch to Music, Like. | Track is favorited in Music. |
 | 24 | Mac: quit the apps. | **Nothing playing** with "Mac" top right; play resumes the last app. |
-| 25 | iPad playing over Bluetooth while the Mac helper is idle. | iPad's track shows; start Spotify on the Mac and the Mac's track takes over. |
+| 25 | iPad playing over Bluetooth while the Mac helper is idle. | iPad's track shows; pause it and the board stays on the iPad, and play resumes it. Start Spotify on the Mac and the Mac's track takes over. |
 | 26 | `./stop.sh`, flash with ESP Ctrl, `./start.sh`. | Port free for flashing; helper reconnects afterwards. |

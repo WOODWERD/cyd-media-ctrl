@@ -41,7 +41,7 @@ python3 media_ctrl_helper.py            # runs in the foreground; Ctrl-C to stop
 - **Flashing the board:** the helper holds the USB port. Run `./stop.sh` first, flash with ESP Ctrl, then `./start.sh`. `stop.sh` also lasts until your next login.
 - **Log:** `~/Library/Logs/MediaCtrl.log` records when the board is found and lost, and each command.
 - **Remove:** `./uninstall.sh`.
-- **iPad and Mac together:** the board pairs with the iPad over Bluetooth and listens to the Mac over USB at the same time. Whichever one is playing is shown; when neither is, the Mac wins.
+- **iPad and Mac together:** the board pairs with the iPad over Bluetooth and listens to the Mac over USB at the same time. The board stays on the last one that was playing until the other starts, so pausing doesn't move it. Until either has played, it shows the Mac.
 
 ## How it works
 

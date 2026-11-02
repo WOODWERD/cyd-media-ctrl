@@ -18,7 +18,7 @@
 #include "ble_media.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.2.5"
 #ifndef BLE_NAME
 #define BLE_NAME "Media Ctrl"
 #endif
@@ -128,6 +128,7 @@ static lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, uint32_t colo
 static lv_obj_t* page_box(lv_obj_t* parent) {
   lv_obj_t* p = box(parent, 0, 0, SCREEN_W, SCREEN_H, C_BG, 0);
   lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, 0);
+  lv_obj_remove_flag(p, LV_OBJ_FLAG_CLICKABLE);   // sits above the title: must not take its long-press
   return p;
 }
 static lv_obj_t* label(lv_obj_t* parent, const char* s, const lv_font_t* f, uint32_t color) {
@@ -227,6 +228,11 @@ static void about_open(lv_event_t*) {
   lv_obj_remove_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
 }
 static void about_close(lv_event_t*) { lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN); }
+static void source_event(lv_event_t*) {
+  if (!Media::switchSource()) { show_toast("Only one device"); return; }
+  char s[40]; snprintf(s, sizeof s, "Switched to %s", Media::shownName());
+  show_toast(s);
+}
 static void pair_another_event(lv_event_t*) {
   Media::pairAnother();
   lv_obj_add_flag(pgAbout, LV_OBJ_FLAG_HIDDEN);
@@ -263,6 +269,9 @@ static void build_top(lv_obj_t* scr) {
 
   lblPlayer = label(scr, "", F_MONO, C_TEXT_2);
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
+  lv_obj_add_flag(lblPlayer, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(lblPlayer, 18);
+  lv_obj_add_event_cb(lblPlayer, source_event, LV_EVENT_LONG_PRESSED, nullptr);
   dot = box(scr, 0, 0, 6, 6, C_WARN, 3);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
 }
@@ -424,20 +433,20 @@ static void render() {
   const bool linked = np.link >= Media::LINK_READY;
   const bool host = np.link == Media::LINK_HOST;
   const bool ams = np.link == Media::LINK_AMS || host;   // "rich": we know what is playing
-  const bool pairing = !linked;
+  const bool another = Media::pairWindow();
+  const bool pairing = !linked || another;   // the pair window shows even with the helper linked
 
   // top bar
-  lv_obj_set_style_bg_color(dot, C(linked ? C_TEXT : C_WARN), 0);
-  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? (np.player[0] ? np.player : host ? "Mac" : "iPad") : "keys only");
+  lv_obj_set_style_bg_color(dot, C(pairing ? C_WARN : C_TEXT), 0);
+  set_text(lblPlayer, pairing ? "Media Ctrl" : ams ? (np.player[0] ? np.player : host ? "Mac" : Media::bleName()) : "keys only");
   lv_obj_align(lblPlayer, LV_ALIGN_TOP_RIGHT, -12, 11);
   lv_obj_align_to(dot, lblPlayer, LV_ALIGN_OUT_LEFT_MID, -5, 0);
-  set_text(lblTitle, pairing ? "Not connected" : "Media Ctrl");
+  set_text(lblTitle, another ? "Pairing" : pairing ? "Not connected" : "Media Ctrl");
 
   // pairing card
   if (pairing) {
     lv_obj_remove_flag(pgPair, LV_OBJ_FLAG_HIDDEN);
     const int cur = np.link == Media::LINK_PAIRING ? 2 : 1;
-    const bool another = Media::pairWindow();
     set_text(lblPairHead, another ? "Pair another device" : "Pair an iPad or Mac");
     set_text(lblPairFoot, another ? "The last device stays paused for a minute." : "Nothing to install.");
     for (int i = 0; i < 3; i++) {
@@ -472,7 +481,7 @@ static void render() {
     lv_obj_set_style_text_font(lblArtist, F_BODY, 0);
     lv_label_set_long_mode(lblArtist, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_height(lblArtist, LV_SIZE_CONTENT);
-    set_text(lblArtist, nothing ? (host ? "Start Spotify or Music on the Mac, or press play to resume." : "Start something on the iPad, or press play to resume the last app.")
+    set_text(lblArtist, nothing ? (host ? "Start Spotify or Music on the Mac, or press play to resume." : "Start something on your device, or press play to resume the last app.")
                                 : "Track info comes from iPad and iPhone only. The buttons still work.");
   }
 

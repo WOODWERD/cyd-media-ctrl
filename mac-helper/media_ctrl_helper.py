@@ -64,14 +64,14 @@ def running(app):
 
 READ = {
     "Spotify": '''tell application "Spotify"
-set st to player state as text
-if st is "stopped" then return "stopped"
+set pstate to player state as text
+if pstate is "stopped" then return "stopped"
 set t to current track
-return st & linefeed & (name of t) & linefeed & (artist of t) & linefeed & ((duration of t) / 1000) & linefeed & player position & linefeed & shuffling & linefeed & repeating
+return pstate & linefeed & (name of t) & linefeed & (artist of t) & linefeed & ((duration of t) / 1000) & linefeed & player position & linefeed & shuffling & linefeed & repeating
 end tell''',
     "Music": '''tell application "Music"
-set st to player state as text
-if st is "stopped" then return "stopped"
+set pstate to player state as text
+if pstate is "stopped" then return "stopped"
 try
   set t to current track
   set nm to name of t
@@ -82,7 +82,7 @@ on error
   set ar to ""
   set du to 0
 end try
-return st & linefeed & nm & linefeed & ar & linefeed & du & linefeed & player position & linefeed & shuffle enabled & linefeed & (song repeat as text)
+return pstate & linefeed & nm & linefeed & ar & linefeed & du & linefeed & player position & linefeed & shuffle enabled & linefeed & (song repeat as text)
 end tell''',
 }
 

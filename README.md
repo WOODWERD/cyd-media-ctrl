@@ -24,7 +24,7 @@ A single Bluetooth LE link to the iPad does two jobs:
 
 3. **The Mac helper (USB).** macOS doesn't publish Now Playing to accessories, so on a Mac the [helper app](docs/MAC.md) reads Spotify and Music and sends that to the board as JSON lines over the USB serial port. It runs the board's button presses back as AppleScript.
 
-When AMS (or the Mac helper) is present, the board uses it for everything it can do. When both the iPad and the Mac are connected, whichever is playing is shown. When it isn't, the media keys are the fallback and the screen says so.
+When AMS (or the Mac helper) is present, the board uses it for everything it can do. When both the iPad and the Mac are connected, the board stays on the last one that was playing until the other starts. When neither source is present, the media keys are the fallback and the screen says so.
 
 | On the screen | iPad (AMS) | Without AMS (media keys) |
 |---|---|---|

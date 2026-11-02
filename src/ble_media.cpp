@@ -54,6 +54,7 @@ static uint32_t connectedAt = 0;
 static uint8_t quickDrops = 0;               // host killed the link before encryption, in a row
 static Preferences prefs;
 static uint8_t ownAddr[6];
+static char peerName[24] = "";               // the Bluetooth host's own name, read after AMS is up
 // "Pair another device": drop the current host and refuse it for a minute so another can pair
 static volatile uint32_t pairWindowUntil = 0;
 static NimBLEAddress kickedPeer;
@@ -147,6 +148,7 @@ class ServerCB : public NimBLEServerCallbacks {
     quickDrops = quick ? quickDrops + 1 : 0;
     connHandle = 0xFFFF; amsAt = 0;
     chRemote = chUpdate = chAttr = nullptr;
+    peerName[0] = 0;
     portENTER_CRITICAL(&mux); clearTrack(); np.link = Media::LINK_ADVERTISING; bump(); portEXIT_CRITICAL(&mux);
     Serial.printf("[ble] disconnected 0x%03X after %lu ms%s\n", reason, (unsigned long)up, quick ? " (pairing refused)" : "");
   }
@@ -191,6 +193,11 @@ static void amsSetup() {
   ok = ok && registerAttrs(ENT_TRACK, {TR_ARTIST, TR_TITLE, TR_DURATION});
   ok = ok && registerAttrs(ENT_QUEUE, {Q_SHUFFLE, Q_REPEAT});
   Serial.printf("[ams] %s (MTU %u)\n", ok ? "subscribed" : "setup failed", cl->getMTU());
+  if (ok) {
+    NimBLEAttValue n = cl->getValue(NimBLEUUID((uint16_t)0x1800), NimBLEUUID((uint16_t)0x2A00));   // GAP device name
+    copyStr(peerName, sizeof peerName, n.data(), n.size());
+    Serial.printf("[ble] host name \"%s\"\n", peerName);
+  }
   if (ok) setLink(Media::LINK_AMS);
   else { setLink(Media::LINK_BLIND); if (++amsTries < 12) amsAt = millis() + 5000; }
 }
@@ -264,14 +271,41 @@ void Media::tick() {
 }
 
 // Two sources can be live at once: the iPad over Bluetooth (AMS) and the Mac helper over USB.
-// Whichever is actually playing wins; if neither is, the Mac helper does (the board is on its cable).
+// The board stays on the last one that was playing until the other starts; pausing never moves it.
+// Until either has played, the Mac helper is shown (the board is on its cable). MC-R14a.
+static bool hostShown = true, played = false;
+
 static bool useHost() {
-  if (!HostLink::active()) return false;
+  static bool hostWas = false, bleWas = false;
+  portENTER_CRITICAL(&mux);
+  const bool ams = np.link == Media::LINK_AMS;
+  const bool blePlaying = ams && np.state == 1;
+  portEXIT_CRITICAL(&mux);
+  if (blePlaying) played = true;
+  if (!HostLink::active()) {
+    if (played) hostShown = false;
+    hostWas = false; bleWas = blePlaying;
+    return false;
+  }
   Media::NowPlaying h; HostLink::snapshot(h);
-  if (h.state == 1) return true;
-  portENTER_CRITICAL(&mux); const bool blePlaying = np.link == Media::LINK_AMS && np.state == 1; portEXIT_CRITICAL(&mux);
-  return !blePlaying;
+  const bool hostPlaying = h.state == 1;
+  if (hostPlaying) played = true;
+  if (hostPlaying && !hostWas) hostShown = true;
+  else if (blePlaying && !bleWas) hostShown = false;
+  hostWas = hostPlaying; bleWas = blePlaying;
+  if (!ams) hostShown = true;            // the iPad went away: show what's still here
+  return hostShown;
 }
+
+bool Media::switchSource() {   // MC-U12: only with both sources present
+  portENTER_CRITICAL(&mux); const bool ams = np.link == Media::LINK_AMS; portEXIT_CRITICAL(&mux);
+  if (!ams || !HostLink::active()) return false;
+  hostShown = !hostShown; played = true;
+  return true;
+}
+
+const char* Media::bleName() { return peerName[0] ? peerName : "Bluetooth"; }
+const char* Media::shownName() { return hostShown ? "Mac" : bleName(); }
 
 void Media::snapshot(NowPlaying& out) {
   if (useHost()) { HostLink::snapshot(out); return; }
