@@ -24,3 +24,5 @@ spec.md
 HANDOFF.md
 reference/
 .claude/
+windows-helper/*/bin/
+windows-helper/*/obj/

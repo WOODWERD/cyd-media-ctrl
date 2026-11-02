@@ -49,6 +49,7 @@ nav:
   - Getting started: GETTING_STARTED.md
   - Flash it: flash/index.md
   - On a Mac: MAC.md
+  - On Windows: WINDOWS.md
   - Firmware & code: firmware.md
   - Bench test: TESTING.md
   - Case & parts: https://woodwerd.github.io/cyd-case/
